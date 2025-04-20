@@ -33,7 +33,7 @@ const LineChart = ({ data, labels, color }) => {
               styles.chartDot,
               {
                 left: `${(index / (data.length - 1)) * 100}%`,
-                bottom: `${(value / Math.max(...data)) * 100}%`,
+                bottom: `${(value / Math.max(...data, 1)) * 100}%`,
                 backgroundColor: color,
               },
             ]}
@@ -54,11 +54,20 @@ const InsightsScreen = () => {
     streak: 0,
     mostProductiveDay: "",
     mostProductiveTime: "",
+    labels: [],
   });
 
-  // Get context data
-  const { completedTasks, statistics } = useTaskContext();
-  const { focusHistory } = useTimerContext();
+  // Get context data with safe fallbacks
+  const taskContext = useTaskContext() || {};
+  const timerContext = useTimerContext() || {};
+
+  // Extract with default values to avoid undefined errors
+  const tasks = taskContext.tasks || [];
+  const streakCount = taskContext.streakCount || 0;
+  const completedTasks = tasks.filter((task) => task.completed) || [];
+
+  // For focus history, we'll create a simple structure if not available
+  const focusHistory = timerContext.focusHistory || [];
 
   // Load and process analytics data
   useEffect(() => {
@@ -82,17 +91,22 @@ const InsightsScreen = () => {
         const dateLabels = generateDateLabels(startDate, endDate, timeRange);
 
         // Filter tasks and focus sessions within date range
-        const filteredTasks = completedTasks.filter(
-          (task) =>
-            new Date(task.completedAt) >= startDate &&
-            new Date(task.completedAt) <= endDate
-        );
+        const filteredTasks = completedTasks.filter((task) => {
+          const completedAt = task.completedAt
+            ? new Date(task.completedAt)
+            : null;
+          return (
+            completedAt && completedAt >= startDate && completedAt <= endDate
+          );
+        });
 
-        const filteredFocusSessions = focusHistory.filter(
-          (session) =>
-            new Date(session.date) >= startDate &&
-            new Date(session.date) <= endDate
-        );
+        // For focus sessions, we'll create a simplified structure
+        const filteredFocusSessions = focusHistory.filter((session) => {
+          const sessionDate = session.date ? new Date(session.date) : null;
+          return (
+            sessionDate && sessionDate >= startDate && sessionDate <= endDate
+          );
+        });
 
         // Calculate task completion by day
         const taskCompletionData = calculateDailyMetrics(
@@ -107,16 +121,18 @@ const InsightsScreen = () => {
           filteredFocusSessions,
           startDate,
           endDate,
-          (session) => session.duration
+          (session) => session.duration || 0
         );
 
         // Find most productive day
         const dayTotals = {};
         filteredTasks.forEach((task) => {
-          const day = new Date(task.completedAt).toLocaleDateString("en-US", {
-            weekday: "long",
-          });
-          dayTotals[day] = (dayTotals[day] || 0) + 1;
+          if (task.completedAt) {
+            const day = new Date(task.completedAt).toLocaleDateString("en-US", {
+              weekday: "long",
+            });
+            dayTotals[day] = (dayTotals[day] || 0) + 1;
+          }
         });
 
         const mostProductiveDay =
@@ -129,8 +145,10 @@ const InsightsScreen = () => {
         // Find most productive time
         const hourTotals = {};
         filteredTasks.forEach((task) => {
-          const hour = new Date(task.completedAt).getHours();
-          hourTotals[hour] = (hourTotals[hour] || 0) + 1;
+          if (task.completedAt) {
+            const hour = new Date(task.completedAt).getHours();
+            hourTotals[hour] = (hourTotals[hour] || 0) + 1;
+          }
         });
 
         const mostProductiveHour =
@@ -149,19 +167,28 @@ const InsightsScreen = () => {
           taskCompletion: taskCompletionData,
           focusTime: focusTimeData,
           labels: dateLabels,
-          streak: statistics.streak,
+          streak: streakCount,
           mostProductiveDay,
           mostProductiveTime,
         });
       } catch (error) {
         console.error("Error generating analytics:", error);
+        // Set default data on error
+        setAnalyticsData({
+          taskCompletion: [],
+          focusTime: [],
+          labels: [],
+          streak: streakCount,
+          mostProductiveDay: "No data",
+          mostProductiveTime: "No data",
+        });
       } finally {
         setIsLoading(false);
       }
     };
 
     generateAnalytics();
-  }, [timeRange, completedTasks, focusHistory, statistics]);
+  }, [timeRange, completedTasks, focusHistory, streakCount]);
 
   // Generate date labels for x-axis based on time range
   const generateDateLabels = (startDate, endDate, range) => {
@@ -239,7 +266,11 @@ const InsightsScreen = () => {
 
   // Calculate productivity score (0-100)
   const calculateProductivityScore = () => {
-    if (analyticsData.taskCompletion.length === 0) return 0;
+    if (
+      !analyticsData.taskCompletion ||
+      analyticsData.taskCompletion.length === 0
+    )
+      return 0;
 
     // Average tasks per day
     const avgTasks =
@@ -335,21 +366,35 @@ const InsightsScreen = () => {
           {/* Task Completion Chart */}
           <View style={styles.chartCard}>
             <Text style={styles.chartTitle}>Tasks Completed</Text>
-            <LineChart
-              data={analyticsData.taskCompletion}
-              labels={analyticsData.labels}
-              color="#5D3FD3"
-            />
+            {analyticsData.taskCompletion.length > 0 ? (
+              <LineChart
+                data={analyticsData.taskCompletion}
+                labels={analyticsData.labels}
+                color="#5D3FD3"
+              />
+            ) : (
+              <View style={styles.emptyDataContainer}>
+                <Text style={styles.emptyDataText}>No task data available</Text>
+              </View>
+            )}
           </View>
 
           {/* Focus Time Chart */}
           <View style={styles.chartCard}>
             <Text style={styles.chartTitle}>Focus Time (minutes)</Text>
-            <LineChart
-              data={analyticsData.focusTime}
-              labels={analyticsData.labels}
-              color="#F39C12"
-            />
+            {analyticsData.focusTime.length > 0 ? (
+              <LineChart
+                data={analyticsData.focusTime}
+                labels={analyticsData.labels}
+                color="#F39C12"
+              />
+            ) : (
+              <View style={styles.emptyDataContainer}>
+                <Text style={styles.emptyDataText}>
+                  No focus time data available
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Insights Grid */}
@@ -379,10 +424,12 @@ const InsightsScreen = () => {
             <View style={styles.insightCard}>
               <Ionicons name="checkmark-done" size={24} color="#9B59B6" />
               <Text style={styles.insightValue}>
-                {analyticsData.taskCompletion.reduce(
-                  (sum, val) => sum + val,
-                  0
-                )}
+                {analyticsData.taskCompletion
+                  ? analyticsData.taskCompletion.reduce(
+                      (sum, val) => sum + val,
+                      0
+                    )
+                  : 0}
               </Text>
               <Text style={styles.insightLabel}>Total Tasks</Text>
             </View>
@@ -393,9 +440,9 @@ const InsightsScreen = () => {
             <Text style={styles.summaryTitle}>Summary</Text>
             <Text style={styles.summaryText}>
               {generateSummary(
-                analyticsData.taskCompletion,
-                analyticsData.focusTime,
-                analyticsData.streak,
+                analyticsData.taskCompletion || [],
+                analyticsData.focusTime || [],
+                analyticsData.streak || 0,
                 calculateProductivityScore()
               )}
             </Text>
@@ -410,10 +457,15 @@ const InsightsScreen = () => {
 const generateSummary = (taskCompletion, focusTime, streak, score) => {
   // Calculate averages
   const avgTasks =
-    taskCompletion.reduce((sum, val) => sum + val, 0) / taskCompletion.length ||
-    0;
+    taskCompletion.length > 0
+      ? taskCompletion.reduce((sum, val) => sum + val, 0) /
+        taskCompletion.length
+      : 0;
+
   const avgFocus =
-    focusTime.reduce((sum, val) => sum + val, 0) / focusTime.length || 0;
+    focusTime.length > 0
+      ? focusTime.reduce((sum, val) => sum + val, 0) / focusTime.length
+      : 0;
 
   // Generate encouraging messages based on data
   let message = "";
@@ -562,6 +614,15 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  emptyDataContainer: {
+    height: 180,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emptyDataText: {
+    color: "#888",
+    fontStyle: "italic",
   },
   insightsGrid: {
     flexDirection: "row",
