@@ -9,6 +9,7 @@ import React, {
 import * as storage from "../utils/storage";
 import { useTaskContext } from "./TaskContext";
 import { Audio } from "expo-av";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Create the context
 export const TimerContext = createContext();
@@ -112,10 +113,16 @@ export const TimerProvider = ({ children }) => {
           }
         }
 
-        // Load focus history (create a default if not found)
-        const history = await storage.getItem("focusHistory");
-        if (history) {
-          setFocusHistory(JSON.parse(history));
+        // Load focus history
+        try {
+          const focusData = await storage.getFocusHistory();
+          if (focusData) {
+            setFocusHistory(focusData);
+          }
+        } catch (error) {
+          console.warn("Failed to load focus history:", error);
+          // Use default empty array
+          setFocusHistory([]);
         }
       } catch (error) {
         console.error("Failed to load timer data:", error);
@@ -204,11 +211,18 @@ export const TimerProvider = ({ children }) => {
         date: today.toISOString(),
         duration: sessionMinutes,
         taskId: currentTaskId,
+        type: "focus",
       };
 
       const updatedHistory = [...focusHistory, newHistoryEntry];
       setFocusHistory(updatedHistory);
-      await storage.setItem("focusHistory", JSON.stringify(updatedHistory));
+
+      // Store the focus history entry
+      try {
+        await storage.addFocusHistoryEntry(newHistoryEntry);
+      } catch (error) {
+        console.warn("Failed to save focus history:", error);
+      }
 
       // Update task time if a task is selected
       if (currentTaskId && updateTaskTime) {

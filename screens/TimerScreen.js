@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,18 +7,20 @@ import {
   ScrollView,
   FlatList,
   Modal,
-  Switch,
   Alert,
+  ActivityIndicator,
+  SafeAreaView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useTimerContext } from "../context/TimerContext";
 import { useTaskContext } from "../context/TaskContext";
 import FocusTimer from "../components/FocusTimer";
 import ProgressBar from "../components/ProgressBar";
 import Colors from "../constants/color";
-import * as storage from "../utils/storage";
 
 const TimerScreen = () => {
+  const router = useRouter();
   const {
     timerSettings,
     updateTimerSettings,
@@ -26,14 +28,23 @@ const TimerScreen = () => {
     currentTaskId,
     setCurrentTask,
     getFocusStats,
+    isRunning,
+    timerType,
+    timeRemaining,
+    pauseTimer,
   } = useTimerContext();
 
-  const { tasks } = useTaskContext();
+  const { tasks, getTasksDueToday, updateTaskTime } = useTaskContext();
 
+  // Local state
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
   const [tempSettings, setTempSettings] = useState({ ...timerSettings });
   const [incompleteTasks, setIncompleteTasks] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [currentTask, setCurrentTaskData] = useState(null);
+  const [sessionFocusTime, setSessionFocusTime] = useState(0);
+  const [timerStartTime, setTimerStartTime] = useState(null);
 
   // Get focus stats with error handling
   const focusStats = getFocusStats
@@ -45,13 +56,26 @@ const TimerScreen = () => {
         averagePerDay: 0,
       };
 
-  // Update incomplete tasks list
+  // Update incomplete tasks list and current task data
   useEffect(() => {
+    setLoading(true);
+
+    // Then filter all incomplete tasks
     if (tasks && Array.isArray(tasks)) {
       const filtered = tasks.filter((task) => !task.completed);
       setIncompleteTasks(filtered);
+
+      // If there's a current task ID, find the task data
+      if (currentTaskId) {
+        const taskData = filtered.find((task) => task.id === currentTaskId);
+        setCurrentTaskData(taskData || null);
+      } else {
+        setCurrentTaskData(null);
+      }
     }
-  }, [tasks]);
+
+    setLoading(false);
+  }, [tasks, currentTaskId]);
 
   // Initialize temp settings when timer settings change
   useEffect(() => {
@@ -60,8 +84,44 @@ const TimerScreen = () => {
     }
   }, [timerSettings]);
 
+  // Track session time when timer is running
+  useEffect(() => {
+    if (isRunning && !timerStartTime && timerType === "pomodoro") {
+      // Timer just started
+      setTimerStartTime(Date.now());
+    } else if (!isRunning && timerStartTime && timerType === "pomodoro") {
+      // Timer just stopped
+      const elapsedTime = Math.floor(
+        (Date.now() - timerStartTime) / (1000 * 60)
+      );
+      if (elapsedTime > 0) {
+        setSessionFocusTime((prevTime) => prevTime + elapsedTime);
+
+        // If there's a current task, update its time
+        if (currentTaskId && updateTaskTime) {
+          updateTaskTime(currentTaskId, elapsedTime);
+        }
+      }
+      setTimerStartTime(null);
+    }
+  }, [isRunning, timerType, timerStartTime, currentTaskId, updateTaskTime]);
+
   // Handle save settings
   const handleSaveSettings = () => {
+    // Validate settings
+    if (
+      !tempSettings ||
+      tempSettings.pomodoro < 1 ||
+      tempSettings.shortBreak < 1 ||
+      tempSettings.longBreak < 5
+    ) {
+      Alert.alert(
+        "Invalid Settings",
+        "Please make sure all timer durations are valid."
+      );
+      return;
+    }
+
     updateTimerSettings(tempSettings);
     setShowSettingsModal(false);
   };
@@ -73,6 +133,8 @@ const TimerScreen = () => {
 
   // Format focus time for display
   const formatFocusTime = (minutes) => {
+    if (!minutes || minutes === 0) return "0 min";
+
     if (minutes < 60) {
       return `${minutes} min`;
     } else {
@@ -84,10 +146,32 @@ const TimerScreen = () => {
 
   // Handle select task
   const handleSelectTask = (taskId) => {
-    if (setCurrentTask) {
+    // If the timer is running, ask for confirmation before changing task
+    if (isRunning && timerType === "pomodoro") {
+      Alert.alert(
+        "Timer Running",
+        "Changing tasks will pause your current timer. Continue?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Continue",
+            onPress: () => {
+              pauseTimer();
+              setCurrentTask(taskId);
+              setShowTasksModal(false);
+            },
+          },
+        ]
+      );
+    } else {
       setCurrentTask(taskId);
+      setShowTasksModal(false);
     }
-    setShowTasksModal(false);
+  };
+
+  // Add a new task
+  const handleAddNewTask = () => {
+    router.push("/addTask");
   };
 
   // Format date for display
@@ -96,6 +180,20 @@ const TimerScreen = () => {
 
     const options = { month: "short", day: "numeric" };
     return new Date(date).toLocaleDateString(undefined, options);
+  };
+
+  // Show task priority indicator
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case "high":
+        return Colors.priorityHigh;
+      case "medium":
+        return Colors.priorityMedium;
+      case "low":
+        return Colors.priorityLow;
+      default:
+        return Colors.priorityMedium;
+    }
   };
 
   // Render task item for selection modal
@@ -107,6 +205,13 @@ const TimerScreen = () => {
       ]}
       onPress={() => handleSelectTask(item.id)}
     >
+      <View
+        style={[
+          styles.taskPriorityIndicator,
+          { backgroundColor: getPriorityColor(item.priority) },
+        ]}
+      />
+
       <View style={styles.taskInfo}>
         <Text
           style={[
@@ -119,7 +224,14 @@ const TimerScreen = () => {
         </Text>
 
         {item.dueDate && (
-          <Text style={styles.taskDueDate}>
+          <Text
+            style={[
+              styles.taskDueDate,
+              new Date(item.dueDate) < new Date()
+                ? styles.overdueDateText
+                : null,
+            ]}
+          >
             Due: {formatDate(item.dueDate)}
           </Text>
         )}
@@ -131,56 +243,115 @@ const TimerScreen = () => {
     </TouchableOpacity>
   );
 
+  // Pomodoro progress percentage
+  const getPomodoroProgress = useCallback(() => {
+    if (timerType !== "pomodoro" || !timeRemaining) return 0;
+
+    const totalSeconds = timerSettings?.pomodoro
+      ? timerSettings.pomodoro * 60
+      : 1500;
+    return Math.round((timeRemaining / totalSeconds) * 100);
+  }, [timerType, timeRemaining, timerSettings]);
+
   return (
-    <View style={styles.container}>
-      {/* Timer */}
-      <FocusTimer />
-
-      {/* Task selection button */}
-      <TouchableOpacity
-        style={styles.selectTaskButton}
-        onPress={() => setShowTasksModal(true)}
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.contentContainer}
       >
-        <Ionicons name="list" size={20} color={Colors.primary} />
-        <Text style={styles.selectTaskText}>
-          {currentTaskId ? "Change Task" : "Select a Task"}
-        </Text>
-      </TouchableOpacity>
-
-      {/* Stats */}
-      <View style={styles.statsContainer}>
-        <Text style={styles.sectionTitle}>Focus Stats</Text>
-
-        <View style={styles.statsRow}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>
-              {formatFocusTime(focusStats.todayTime)}
+        {/* Current task banner */}
+        {currentTask && (
+          <View style={styles.currentTaskBanner}>
+            <Text style={styles.currentTaskLabel}>Current Task:</Text>
+            <Text style={styles.currentTaskTitle} numberOfLines={1}>
+              {currentTask.title}
             </Text>
-            <Text style={styles.statLabel}>Today</Text>
+            <TouchableOpacity
+              style={styles.changeTaskButton}
+              onPress={() => setShowTasksModal(true)}
+            >
+              <Text style={styles.changeTaskText}>Change</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Timer Component */}
+        <FocusTimer />
+
+        {/* Pomodoro Progress */}
+        {timerType === "pomodoro" && timeRemaining > 0 && (
+          <View style={styles.progressContainer}>
+            <View style={styles.progressHeader}>
+              <Text style={styles.progressLabel}>Session Progress</Text>
+              <Text style={styles.progressValue}>{getPomodoroProgress()}%</Text>
+            </View>
+            <ProgressBar
+              progress={getPomodoroProgress()}
+              height={8}
+              color={isRunning ? Colors.timerPomodoro : Colors.gray400}
+            />
+          </View>
+        )}
+
+        {/* Task selection button */}
+        {!currentTask && (
+          <View style={styles.taskSelectionArea}>
+            <TouchableOpacity
+              style={styles.selectTaskButton}
+              onPress={() => setShowTasksModal(true)}
+            >
+              <Ionicons name="list" size={20} color={Colors.primary} />
+              <Text style={styles.selectTaskText}>Select a Task</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Stats */}
+        <View style={styles.statsContainer}>
+          <Text style={styles.sectionTitle}>Focus Stats</Text>
+
+          <View style={styles.statsRow}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>
+                {formatFocusTime(focusStats.todayTime)}
+              </Text>
+              <Text style={styles.statLabel}>Today</Text>
+            </View>
+
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{completedSessions || 0}</Text>
+              <Text style={styles.statLabel}>Sessions</Text>
+            </View>
+
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>
+                {formatFocusTime(focusStats.totalTime)}
+              </Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
           </View>
 
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{completedSessions || 0}</Text>
-            <Text style={styles.statLabel}>Sessions</Text>
-          </View>
-
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>
-              {formatFocusTime(focusStats.totalTime)}
-            </Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
+          {/* Current session stats if timer is or was running */}
+          {(sessionFocusTime > 0 || isRunning) && timerType === "pomodoro" && (
+            <View style={styles.sessionStatsContainer}>
+              <Text style={styles.sessionLabel}>Current session:</Text>
+              <Text style={styles.sessionTime}>
+                {formatFocusTime(sessionFocusTime)}{" "}
+                {isRunning ? "(running)" : ""}
+              </Text>
+            </View>
+          )}
         </View>
-      </View>
 
-      {/* Timer Settings Button */}
-      <TouchableOpacity
-        style={styles.settingsButton}
-        onPress={() => setShowSettingsModal(true)}
-      >
-        <Ionicons name="settings-outline" size={20} color={Colors.gray600} />
-        <Text style={styles.settingsText}>Timer Settings</Text>
-      </TouchableOpacity>
+        {/* Timer Settings Button */}
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={() => setShowSettingsModal(true)}
+        >
+          <Ionicons name="settings-outline" size={20} color={Colors.gray600} />
+          <Text style={styles.settingsText}>Timer Settings</Text>
+        </TouchableOpacity>
+      </ScrollView>
 
       {/* Settings Modal */}
       <Modal
@@ -198,104 +369,124 @@ const TimerScreen = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.settingItem}>
-              <Text style={styles.settingLabel}>Pomodoro</Text>
-              <View style={styles.settingControls}>
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      pomodoro: Math.max(1, tempSettings.pomodoro - 5),
-                    })
-                  }
-                >
-                  <Ionicons name="remove" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+            <ScrollView>
+              <View style={styles.settingItem}>
+                <Text style={styles.settingLabel}>Pomodoro</Text>
+                <View style={styles.settingControls}>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        pomodoro: Math.max(
+                          1,
+                          (tempSettings?.pomodoro || 25) - 5
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="remove" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
 
-                <Text style={styles.settingValue}>
-                  {formatSettingTime(tempSettings?.pomodoro || 25)}
-                </Text>
+                  <Text style={styles.settingValue}>
+                    {formatSettingTime(tempSettings?.pomodoro || 25)}
+                  </Text>
 
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      pomodoro: Math.min(60, tempSettings.pomodoro + 5),
-                    })
-                  }
-                >
-                  <Ionicons name="add" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        pomodoro: Math.min(
+                          60,
+                          (tempSettings?.pomodoro || 25) + 5
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="add" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
 
-            <View style={styles.settingItem}>
-              <Text style={styles.settingLabel}>Short Break</Text>
-              <View style={styles.settingControls}>
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      shortBreak: Math.max(1, tempSettings.shortBreak - 1),
-                    })
-                  }
-                >
-                  <Ionicons name="remove" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+              <View style={styles.settingItem}>
+                <Text style={styles.settingLabel}>Short Break</Text>
+                <View style={styles.settingControls}>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        shortBreak: Math.max(
+                          1,
+                          (tempSettings?.shortBreak || 5) - 1
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="remove" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
 
-                <Text style={styles.settingValue}>
-                  {formatSettingTime(tempSettings?.shortBreak || 5)}
-                </Text>
+                  <Text style={styles.settingValue}>
+                    {formatSettingTime(tempSettings?.shortBreak || 5)}
+                  </Text>
 
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      shortBreak: Math.min(30, tempSettings.shortBreak + 1),
-                    })
-                  }
-                >
-                  <Ionicons name="add" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        shortBreak: Math.min(
+                          30,
+                          (tempSettings?.shortBreak || 5) + 1
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="add" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
 
-            <View style={styles.settingItem}>
-              <Text style={styles.settingLabel}>Long Break</Text>
-              <View style={styles.settingControls}>
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      longBreak: Math.max(5, tempSettings.longBreak - 5),
-                    })
-                  }
-                >
-                  <Ionicons name="remove" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+              <View style={styles.settingItem}>
+                <Text style={styles.settingLabel}>Long Break</Text>
+                <View style={styles.settingControls}>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        longBreak: Math.max(
+                          5,
+                          (tempSettings?.longBreak || 15) - 5
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="remove" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
 
-                <Text style={styles.settingValue}>
-                  {formatSettingTime(tempSettings?.longBreak || 15)}
-                </Text>
+                  <Text style={styles.settingValue}>
+                    {formatSettingTime(tempSettings?.longBreak || 15)}
+                  </Text>
 
-                <TouchableOpacity
-                  style={styles.settingButton}
-                  onPress={() =>
-                    setTempSettings({
-                      ...tempSettings,
-                      longBreak: Math.min(60, tempSettings.longBreak + 5),
-                    })
-                  }
-                >
-                  <Ionicons name="add" size={20} color={Colors.gray600} />
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.settingButton}
+                    onPress={() =>
+                      setTempSettings({
+                        ...tempSettings,
+                        longBreak: Math.min(
+                          60,
+                          (tempSettings?.longBreak || 15) + 5
+                        ),
+                      })
+                    }
+                  >
+                    <Ionicons name="add" size={20} color={Colors.gray600} />
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            </ScrollView>
 
             <TouchableOpacity
               style={styles.saveButton}
@@ -323,7 +514,12 @@ const TimerScreen = () => {
               </TouchableOpacity>
             </View>
 
-            {incompleteTasks.length > 0 ? (
+            {loading ? (
+              <View style={styles.loaderContainer}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.loaderText}>Loading tasks...</Text>
+              </View>
+            ) : incompleteTasks.length > 0 ? (
               <FlatList
                 data={incompleteTasks}
                 renderItem={renderTaskItem}
@@ -341,30 +537,97 @@ const TimerScreen = () => {
                 <Text style={styles.emptyTasksSubtext}>
                   Add tasks to select them for focused work
                 </Text>
+
+                <TouchableOpacity
+                  style={styles.addTaskButton}
+                  onPress={handleAddNewTask}
+                >
+                  <Ionicons name="add-circle" size={20} color="white" />
+                  <Text style={styles.addTaskText}>Add New Task</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  scrollContainer: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingBottom: 24,
+  },
+  currentTaskBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.primary + "15",
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  currentTaskLabel: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: Colors.gray600,
+    marginRight: 6,
+  },
+  currentTaskTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.primary,
+  },
+  changeTaskButton: {
+    backgroundColor: Colors.primary + "30",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  changeTaskText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: Colors.primary,
+  },
+  progressContainer: {
+    marginHorizontal: 16,
+    marginVertical: 8,
+  },
+  progressHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  progressLabel: {
+    fontSize: 14,
+    color: Colors.gray600,
+  },
+  progressValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.timerPomodoro,
+  },
+  taskSelectionArea: {
+    marginVertical: 12,
+    alignItems: "center",
+    paddingHorizontal: 16,
   },
   selectTaskButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginVertical: 16,
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     borderRadius: 8,
     backgroundColor: Colors.primary + "15",
-    alignSelf: "center",
+    minWidth: 150,
   },
   selectTaskText: {
     fontSize: 16,
@@ -373,7 +636,9 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   statsContainer: {
-    margin: 16,
+    marginTop: 8,
+    marginHorizontal: 16,
+    marginBottom: 16,
     padding: 16,
     backgroundColor: Colors.gray100,
     borderRadius: 12,
@@ -402,11 +667,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.gray600,
   },
+  sessionStatsContainer: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.gray200,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sessionLabel: {
+    fontSize: 14,
+    color: Colors.gray600,
+    marginRight: 8,
+  },
+  sessionTime: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.primary,
+  },
   settingsButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 16,
+    marginTop: 8,
+    marginBottom: 24,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
@@ -497,11 +782,16 @@ const styles = StyleSheet.create({
   taskItem: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
     borderBottomColor: Colors.gray200,
+  },
+  taskPriorityIndicator: {
+    width: 4,
+    height: 36,
+    borderRadius: 2,
+    marginRight: 12,
   },
   selectedTaskItem: {
     backgroundColor: Colors.primary + "15",
@@ -522,6 +812,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.gray600,
   },
+  overdueDateText: {
+    color: Colors.error,
+    fontWeight: "500",
+  },
+  loaderContainer: {
+    padding: 24,
+    alignItems: "center",
+  },
+  loaderText: {
+    marginTop: 12,
+    color: Colors.gray600,
+  },
   emptyTasksContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -538,6 +840,21 @@ const styles = StyleSheet.create({
     color: Colors.gray500,
     textAlign: "center",
     marginTop: 8,
+    marginBottom: 16,
+  },
+  addTaskButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  addTaskText: {
+    color: "white",
+    fontWeight: "500",
+    marginLeft: 8,
   },
 });
 

@@ -13,6 +13,7 @@ const KEYS = {
   JOURNAL_ENTRIES: "lazybuster_journal_entries",
   SETTINGS: "lazybuster_app_settings",
   REALITY_CHECK_DISMISSED: "lazybuster_reality_check_dismissed",
+  FOCUS_HISTORY: "lazybuster_focus_history",
 };
 
 // Error handling wrapper
@@ -23,6 +24,20 @@ const handleAsyncStorageOperation = async (operation, defaultValue = null) => {
     console.error("AsyncStorage operation failed:", error);
     return defaultValue;
   }
+};
+
+// Exposed getItem and setItem methods for general purpose storage
+export const getItem = async (key) => {
+  return handleAsyncStorageOperation(async () => {
+    return await AsyncStorage.getItem(key);
+  });
+};
+
+export const setItem = async (key, value) => {
+  return handleAsyncStorageOperation(async () => {
+    await AsyncStorage.setItem(key, value);
+    return true;
+  }, false);
 };
 
 // Task-related storage functions
@@ -165,6 +180,31 @@ export const addJournalEntry = async (entry) => {
     const entries = await getJournalEntries();
     const updatedEntries = [...entries, entry];
     await saveJournalEntries(updatedEntries);
+    return true;
+  }, false);
+};
+
+// Focus history storage functions
+export const saveFocusHistory = async (history) => {
+  return handleAsyncStorageOperation(async () => {
+    const jsonValue = JSON.stringify(history);
+    await AsyncStorage.setItem(KEYS.FOCUS_HISTORY, jsonValue);
+    return true;
+  }, false);
+};
+
+export const getFocusHistory = async () => {
+  return handleAsyncStorageOperation(async () => {
+    const jsonValue = await AsyncStorage.getItem(KEYS.FOCUS_HISTORY);
+    return jsonValue != null ? JSON.parse(jsonValue) : [];
+  }, []);
+};
+
+export const addFocusHistoryEntry = async (entry) => {
+  return handleAsyncStorageOperation(async () => {
+    const history = await getFocusHistory();
+    const updatedHistory = [...history, entry];
+    await saveFocusHistory(updatedHistory);
     return true;
   }, false);
 };

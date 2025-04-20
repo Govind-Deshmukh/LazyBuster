@@ -5,15 +5,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter } from "expo-router"; // Changed to useRouter hook
 import { useTaskContext } from "../../context/TaskContext";
 import { useTimerContext } from "../../context/TimerContext";
 import ProgressBar from "../../components/ProgressBar";
 import RealityCheck from "../../components/RealityCheck";
-import * as storage from "../../utils/storage";
 import {
   MOTIVATIONAL_QUOTES,
   REALITY_CHECK_SEVERITY,
@@ -21,7 +19,7 @@ import {
 import Colors from "../../constants/color";
 
 export default function HomeScreen() {
-  const router = useRouter();
+  const router = useRouter(); // Use the router hook to get the router object
   const {
     tasks,
     getTasksDueToday,
@@ -93,7 +91,12 @@ export default function HomeScreen() {
 
   // Navigate to focus timer
   const navigateToFocusTimer = () => {
-    router.push("/tasks");
+    router.push("/(tabs)/timer");
+  };
+
+  // Navigate to journal
+  const navigateToJournal = () => {
+    router.push("/(tabs)/journal");
   };
 
   return (
@@ -238,7 +241,7 @@ export default function HomeScreen() {
 
         <TouchableOpacity
           style={styles.actionButton}
-          onPress={() => router.push("/journal")}
+          onPress={navigateToJournal}
         >
           <View
             style={[styles.actionIcon, { backgroundColor: Colors.info + "20" }]}

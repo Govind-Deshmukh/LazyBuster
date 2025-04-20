@@ -101,10 +101,10 @@ const JournalScreen = () => {
       date: new Date().toISOString(),
       text: newEntryText,
       tasksCompleted,
-      mood: "neutral", // Default mood
+      mood: "neutral",
     };
 
-    setEntries([newEntry, ...entries]);
+    setEntries((prevEntries) => [newEntry, ...prevEntries]);
     setNewEntryText("");
     setShowEntryModal(false);
   };
@@ -123,10 +123,10 @@ const JournalScreen = () => {
       isCompleted: false,
     };
 
-    setGoals({
-      ...goals,
-      [newGoalType]: [...goals[newGoalType], newGoal],
-    });
+    setGoals((prevGoals) => ({
+      ...prevGoals,
+      [newGoalType]: [...prevGoals[newGoalType], newGoal],
+    }));
 
     setNewGoalText("");
     setShowGoalModal(false);
@@ -134,14 +134,12 @@ const JournalScreen = () => {
 
   // Toggle goal completion status
   const toggleGoalCompletion = (type, goalId) => {
-    const updatedGoals = {
-      ...goals,
-      [type]: goals[type].map((goal) =>
+    setGoals((prevGoals) => ({
+      ...prevGoals,
+      [type]: prevGoals[type].map((goal) =>
         goal.id === goalId ? { ...goal, isCompleted: !goal.isCompleted } : goal
       ),
-    };
-
-    setGoals(updatedGoals);
+    }));
   };
 
   // Delete a goal

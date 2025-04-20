@@ -12,16 +12,15 @@ import {
   Alert,
   Animated,
 } from "react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { useTaskContext } from "../context/TaskContext";
 import TaskItem from "../components/TaskItem";
 import PriorityPicker from "../components/PriorityPicker";
+import Colors from "../constants/color";
 
 const TasksScreen = ({ navigation, route }) => {
   const {
     tasks,
-    completedTasks,
     addTask,
     updateTask,
     deleteTask,
@@ -37,6 +36,8 @@ const TasksScreen = ({ navigation, route }) => {
 
   // State for new/editing task
   const [taskText, setTaskText] = useState("");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
   const [taskPriority, setTaskPriority] = useState("medium");
   const [taskDueDate, setTaskDueDate] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -48,11 +49,11 @@ const TasksScreen = ({ navigation, route }) => {
 
   // Check for route params
   useEffect(() => {
-    if (route.params?.openAddTask) {
+    if (route?.params?.openAddTask) {
       setShowAddModal(true);
     }
 
-    if (route.params?.focusedTaskId) {
+    if (route?.params?.focusedTaskId) {
       // Find and edit specific task
       const taskToEdit = tasks.find(
         (task) => task.id === route.params.focusedTaskId
@@ -61,7 +62,7 @@ const TasksScreen = ({ navigation, route }) => {
         handleEditTask(taskToEdit);
       }
     }
-  }, [route.params]);
+  }, [route?.params]);
 
   // Listen for scroll to show/hide filter bar
   const handleScroll = (event) => {
@@ -76,6 +77,8 @@ const TasksScreen = ({ navigation, route }) => {
 
   // Filter tasks based on selected filter
   const getFilteredTasks = () => {
+    if (!tasks || tasks.length === 0) return [];
+
     switch (filterMode) {
       case "today":
         const today = new Date().toLocaleDateString();
@@ -99,7 +102,10 @@ const TasksScreen = ({ navigation, route }) => {
       case "low":
         return tasks.filter((task) => task.priority === "low");
       case "completed":
-        return completedTasks.slice().reverse();
+        return tasks
+          .filter((task) => task.completed)
+          .slice()
+          .reverse();
       default:
         return tasks;
     }
@@ -107,17 +113,18 @@ const TasksScreen = ({ navigation, route }) => {
 
   // Handle adding a new task
   const handleAddTask = () => {
-    if (taskText.trim() === "") {
-      Alert.alert("Error", "Task cannot be empty");
+    if (taskTitle.trim() === "") {
+      Alert.alert("Error", "Task title cannot be empty");
       return;
     }
 
     const newTask = {
-      text: taskText,
+      title: taskTitle,
+      description: taskDescription,
       priority: taskPriority,
       dueDate: taskDueDate,
       isRecurring: isRecurring,
-      recurringPattern: isRecurring ? recurringPattern : null,
+      recurringType: isRecurring ? recurringPattern : null,
     };
 
     if (isEditing && editingTaskId) {
@@ -127,7 +134,8 @@ const TasksScreen = ({ navigation, route }) => {
     }
 
     // Reset form and close modal
-    setTaskText("");
+    setTaskTitle("");
+    setTaskDescription("");
     setTaskPriority("medium");
     setTaskDueDate(null);
     setIsRecurring(false);
@@ -141,11 +149,12 @@ const TasksScreen = ({ navigation, route }) => {
   const handleEditTask = (task) => {
     setIsEditing(true);
     setEditingTaskId(task.id);
-    setTaskText(task.text);
-    setTaskPriority(task.priority);
-    setTaskDueDate(task.dueDate);
+    setTaskTitle(task.title || "");
+    setTaskDescription(task.description || "");
+    setTaskPriority(task.priority || "medium");
+    setTaskDueDate(task.dueDate || null);
     setIsRecurring(task.isRecurring || false);
-    setRecurringPattern(task.recurringPattern || "daily");
+    setRecurringPattern(task.recurringType || "daily");
     setShowAddModal(true);
   };
 
@@ -161,13 +170,72 @@ const TasksScreen = ({ navigation, route }) => {
     ]);
   };
 
-  // Handle date picking
-  const handleDateChange = (event, selectedDate) => {
-    setShowDatePicker(false);
-    if (selectedDate) {
-      setTaskDueDate(selectedDate.toISOString());
+  // Custom date picker options
+  const dateOptions = [
+    { label: "Today", value: 0 },
+    { label: "Tomorrow", value: 1 },
+    { label: "Next Week", value: 7 },
+    { label: "In Two Weeks", value: 14 },
+    { label: "No Due Date", value: null },
+  ];
+
+  // Set due date based on days from now
+  const setDateFromNow = (days) => {
+    if (days === null) {
+      setTaskDueDate(null);
+      setShowDatePicker(false);
+      return;
     }
+
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    date.setHours(23, 59, 59, 0);
+    setTaskDueDate(date.toISOString());
+    setShowDatePicker(false);
   };
+
+  // Format date for display
+  const formatDate = (dateString) => {
+    if (!dateString) return "Select Due Date";
+
+    return new Date(dateString).toLocaleDateString();
+  };
+
+  // Custom DatePicker component as a replacement for DateTimePicker
+  const CustomDatePicker = () => (
+    <Modal
+      visible={showDatePicker}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={() => setShowDatePicker(false)}
+    >
+      <View style={styles.datePickerModalOverlay}>
+        <View style={styles.datePickerModal}>
+          <View style={styles.datePickerHeader}>
+            <Text style={styles.datePickerTitle}>Select Due Date</Text>
+            <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+              <Ionicons name="close" size={24} color={Colors.gray600} />
+            </TouchableOpacity>
+          </View>
+
+          {dateOptions.map((option) => (
+            <TouchableOpacity
+              key={option.label}
+              style={styles.dateOption}
+              onPress={() => setDateFromNow(option.value)}
+            >
+              <Text style={styles.dateOptionText}>{option.label}</Text>
+              <Ionicons
+                name={option.value === null ? "calendar-outline" : "calendar"}
+                size={20}
+                color={option.value === null ? Colors.gray600 : Colors.primary}
+              />
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    </Modal>
+  );
 
   return (
     <View style={styles.container}>
@@ -315,13 +383,7 @@ const TasksScreen = ({ navigation, route }) => {
         data={getFilteredTasks()}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <TaskItem
-            task={item}
-            onComplete={() => completeTask(item.id)}
-            onEdit={() => handleEditTask(item)}
-            onDelete={() => handleDeleteTask(item.id)}
-            isCompleted={filterMode === "completed"}
-          />
+          <TaskItem task={item} onPress={() => handleEditTask(item)} />
         )}
         onScroll={handleScroll}
         contentContainerStyle={styles.listContent}
@@ -366,18 +428,27 @@ const TasksScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
 
+            <Text style={styles.inputLabel}>Title:</Text>
+            <TextInput
+              style={styles.titleInput}
+              placeholder="What needs to be done?"
+              value={taskTitle}
+              onChangeText={setTaskTitle}
+            />
+
+            <Text style={styles.inputLabel}>Description (optional):</Text>
             <TextInput
               style={styles.input}
-              placeholder="What needs to be done?"
-              value={taskText}
-              onChangeText={setTaskText}
+              placeholder="Add details about this task..."
+              value={taskDescription}
+              onChangeText={setTaskDescription}
               multiline
             />
 
             <Text style={styles.inputLabel}>Priority:</Text>
             <PriorityPicker
               selectedPriority={taskPriority}
-              onSelectPriority={setTaskPriority}
+              onPriorityChange={setTaskPriority}
             />
 
             <View style={styles.dateSection}>
@@ -387,9 +458,7 @@ const TasksScreen = ({ navigation, route }) => {
                 onPress={() => setShowDatePicker(true)}
               >
                 <Text style={styles.dateButtonText}>
-                  {taskDueDate
-                    ? new Date(taskDueDate).toLocaleDateString()
-                    : "Select Date"}
+                  {taskDueDate ? formatDate(taskDueDate) : "Select Date"}
                 </Text>
                 <Ionicons name="calendar" size={20} color="#5D3FD3" />
               </TouchableOpacity>
@@ -403,14 +472,8 @@ const TasksScreen = ({ navigation, route }) => {
               )}
             </View>
 
-            {showDatePicker && (
-              <DateTimePicker
-                value={taskDueDate ? new Date(taskDueDate) : new Date()}
-                mode="date"
-                display="default"
-                onChange={handleDateChange}
-              />
-            )}
+            {/* Custom Date Picker */}
+            <CustomDatePicker />
 
             <View style={styles.switchRow}>
               <Text style={styles.inputLabel}>Recurring Task:</Text>
@@ -567,6 +630,14 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "bold",
   },
+  titleInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 15,
+    fontSize: 16,
+  },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -644,6 +715,43 @@ const styles = StyleSheet.create({
   saveButtonText: {
     color: "white",
     fontWeight: "bold",
+    fontSize: 16,
+  },
+  datePickerModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  datePickerModal: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 20,
+    width: "80%",
+  },
+  datePickerHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+    paddingBottom: 10,
+  },
+  datePickerTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+  },
+  dateOption: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  dateOptionText: {
     fontSize: 16,
   },
 });

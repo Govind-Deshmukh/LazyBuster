@@ -10,21 +10,19 @@ import {
   Platform,
   KeyboardAvoidingView,
   Alert,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router"; // Fix router import
 import { useTaskContext } from "../context/TaskContext";
 import PriorityPicker from "../components/PriorityPicker";
 import Colors from "../constants/color";
 import { RECURRING_OPTIONS, TASK_CATEGORIES } from "../constants/presets";
 import * as Notifications from "../utils/notifications";
 
-// Using Modal for a custom date picker implementation
-import { Modal } from "react-native";
-
 // This is the AddTask screen component
 export default function AddTask() {
-  const router = useRouter();
+  const router = useRouter(); // Use the router hook
   const params = useLocalSearchParams();
   const { tasks, addTask, updateTask, deleteTask } = useTaskContext();
 
@@ -51,11 +49,11 @@ export default function AddTask() {
 
   // Populate form when editing an existing task
   useEffect(() => {
-    if (params.taskId) {
-      const task = tasks.find((t) => t.id === params.taskId);
+    if (params?.taskId) {
+      const task = tasks?.find((t) => t.id === params.taskId);
       if (task) {
         setTaskId(task.id);
-        setTitle(task.title);
+        setTitle(task.title || "");
         setDescription(task.description || "");
         setPriority(task.priority || "medium");
         setCategory(task.category || "general");
@@ -65,7 +63,7 @@ export default function AddTask() {
         setEditMode(true);
       }
     }
-  }, [params.taskId, tasks]);
+  }, [params?.taskId, tasks]);
 
   // Handle form submission
   const handleSubmit = async () => {

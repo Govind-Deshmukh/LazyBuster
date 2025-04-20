@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -11,7 +11,6 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useTaskContext } from "../context/TaskContext";
 import { useTimerContext } from "../context/TimerContext";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Mock LineChart component since we're staying lightweight
 const LineChart = ({ data, labels, color }) => {
@@ -64,134 +63,17 @@ const InsightsScreen = () => {
   // Extract with default values to avoid undefined errors
   const tasks = taskContext.tasks || [];
   const streakCount = taskContext.streakCount || 0;
-  const completedTasks = tasks.filter((task) => task.completed) || [];
+
+  // Memoize derived data to prevent recalculations
+  const completedTasks = useMemo(() => {
+    return tasks.filter((task) => task.completed) || [];
+  }, [tasks]);
 
   // For focus history, we'll create a simple structure if not available
   const focusHistory = timerContext.focusHistory || [];
 
-  // Load and process analytics data
-  useEffect(() => {
-    const generateAnalytics = async () => {
-      setIsLoading(true);
-
-      try {
-        // Get date range
-        const endDate = new Date();
-        const startDate = new Date();
-
-        if (timeRange === "week") {
-          startDate.setDate(endDate.getDate() - 7);
-        } else if (timeRange === "month") {
-          startDate.setDate(endDate.getDate() - 30);
-        } else {
-          startDate.setDate(endDate.getDate() - 90); // 3 months for 'year' view
-        }
-
-        // Generate date labels for x-axis
-        const dateLabels = generateDateLabels(startDate, endDate, timeRange);
-
-        // Filter tasks and focus sessions within date range
-        const filteredTasks = completedTasks.filter((task) => {
-          const completedAt = task.completedAt
-            ? new Date(task.completedAt)
-            : null;
-          return (
-            completedAt && completedAt >= startDate && completedAt <= endDate
-          );
-        });
-
-        // For focus sessions, we'll create a simplified structure
-        const filteredFocusSessions = focusHistory.filter((session) => {
-          const sessionDate = session.date ? new Date(session.date) : null;
-          return (
-            sessionDate && sessionDate >= startDate && sessionDate <= endDate
-          );
-        });
-
-        // Calculate task completion by day
-        const taskCompletionData = calculateDailyMetrics(
-          filteredTasks,
-          startDate,
-          endDate,
-          (task) => 1 // Count each task as 1
-        );
-
-        // Calculate focus time by day (in minutes)
-        const focusTimeData = calculateDailyMetrics(
-          filteredFocusSessions,
-          startDate,
-          endDate,
-          (session) => session.duration || 0
-        );
-
-        // Find most productive day
-        const dayTotals = {};
-        filteredTasks.forEach((task) => {
-          if (task.completedAt) {
-            const day = new Date(task.completedAt).toLocaleDateString("en-US", {
-              weekday: "long",
-            });
-            dayTotals[day] = (dayTotals[day] || 0) + 1;
-          }
-        });
-
-        const mostProductiveDay =
-          Object.keys(dayTotals).length > 0
-            ? Object.keys(dayTotals).reduce((a, b) =>
-                dayTotals[a] > dayTotals[b] ? a : b
-              )
-            : "No data";
-
-        // Find most productive time
-        const hourTotals = {};
-        filteredTasks.forEach((task) => {
-          if (task.completedAt) {
-            const hour = new Date(task.completedAt).getHours();
-            hourTotals[hour] = (hourTotals[hour] || 0) + 1;
-          }
-        });
-
-        const mostProductiveHour =
-          Object.keys(hourTotals).length > 0
-            ? Object.keys(hourTotals).reduce((a, b) =>
-                hourTotals[a] > hourTotals[b] ? a : b
-              )
-            : null;
-
-        const mostProductiveTime = mostProductiveHour
-          ? formatHour(parseInt(mostProductiveHour))
-          : "No data";
-
-        // Set analytics data
-        setAnalyticsData({
-          taskCompletion: taskCompletionData,
-          focusTime: focusTimeData,
-          labels: dateLabels,
-          streak: streakCount,
-          mostProductiveDay,
-          mostProductiveTime,
-        });
-      } catch (error) {
-        console.error("Error generating analytics:", error);
-        // Set default data on error
-        setAnalyticsData({
-          taskCompletion: [],
-          focusTime: [],
-          labels: [],
-          streak: streakCount,
-          mostProductiveDay: "No data",
-          mostProductiveTime: "No data",
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    generateAnalytics();
-  }, [timeRange, completedTasks, focusHistory, streakCount]);
-
-  // Generate date labels for x-axis based on time range
-  const generateDateLabels = (startDate, endDate, range) => {
+  // Generate date labels for x-axis based on time range - memoized
+  const generateDateLabels = useCallback((startDate, endDate, range) => {
     const labels = [];
     const currentDate = new Date(startDate);
 
@@ -232,42 +114,196 @@ const InsightsScreen = () => {
     }
 
     return labels;
-  };
+  }, []);
 
-  // Calculate daily metrics for tasks or focus sessions
-  const calculateDailyMetrics = (items, startDate, endDate, valueFunction) => {
-    const data = [];
-    const currentDate = new Date(startDate);
+  // Calculate daily metrics for tasks or focus sessions - memoized
+  const calculateDailyMetrics = useCallback(
+    (items, startDate, endDate, valueFunction) => {
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        // Return an array of zeros with length equal to days between start and end
+        const days =
+          Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1;
+        return Array(days).fill(0);
+      }
 
-    while (currentDate <= endDate) {
-      const dayItems = items.filter((item) => {
-        const itemDate = new Date(item.completedAt || item.date);
-        return itemDate.toDateString() === currentDate.toDateString();
-      });
+      const data = [];
+      const currentDate = new Date(startDate);
 
-      const dayTotal = dayItems.reduce(
-        (total, item) => total + valueFunction(item),
-        0
-      );
-      data.push(dayTotal);
+      while (currentDate <= endDate) {
+        const currentDateStr = currentDate.toDateString();
 
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
+        const dayItems = items.filter((item) => {
+          if (!item) return false;
+          const itemDate = new Date(item.completedAt || item.date);
+          return itemDate && itemDate.toDateString() === currentDateStr;
+        });
 
-    return data;
-  };
+        const dayTotal = dayItems.reduce(
+          (total, item) => total + valueFunction(item),
+          0
+        );
+
+        data.push(dayTotal);
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      return data;
+    },
+    []
+  );
 
   // Format hour to AM/PM
-  const formatHour = (hour) => {
+  const formatHour = useCallback((hour) => {
     if (hour === 0) return "12 AM";
     if (hour === 12) return "12 PM";
     return hour < 12 ? `${hour} AM` : `${hour - 12} PM`;
-  };
+  }, []);
+
+  // Load and process analytics data - with proper dependency array
+  useEffect(() => {
+    let isMounted = true;
+
+    const generateAnalytics = async () => {
+      if (!isMounted) return;
+      setIsLoading(true);
+
+      try {
+        // Get date range
+        const endDate = new Date();
+        const startDate = new Date();
+
+        if (timeRange === "week") {
+          startDate.setDate(endDate.getDate() - 7);
+        } else if (timeRange === "month") {
+          startDate.setDate(endDate.getDate() - 30);
+        } else {
+          startDate.setDate(endDate.getDate() - 90); // 3 months for 'year' view
+        }
+
+        // Generate date labels for x-axis
+        const dateLabels = generateDateLabels(startDate, endDate, timeRange);
+
+        // Filter tasks and focus sessions within date range
+        const filteredTasks = completedTasks.filter((task) => {
+          if (!task || !task.completedAt) return false;
+          const completedAt = new Date(task.completedAt);
+          return completedAt >= startDate && completedAt <= endDate;
+        });
+
+        // For focus sessions, we'll create a simplified structure
+        const filteredFocusSessions = (focusHistory || []).filter((session) => {
+          if (!session || !session.date) return false;
+          const sessionDate = new Date(session.date);
+          return sessionDate >= startDate && sessionDate <= endDate;
+        });
+
+        // Calculate task completion by day
+        const taskCompletionData = calculateDailyMetrics(
+          filteredTasks,
+          startDate,
+          endDate,
+          (task) => 1 // Count each task as 1
+        );
+
+        // Calculate focus time by day (in minutes)
+        const focusTimeData = calculateDailyMetrics(
+          filteredFocusSessions,
+          startDate,
+          endDate,
+          (session) => session.duration || 0
+        );
+
+        // Find most productive day
+        const dayTotals = {};
+        filteredTasks.forEach((task) => {
+          if (task && task.completedAt) {
+            const day = new Date(task.completedAt).toLocaleDateString("en-US", {
+              weekday: "long",
+            });
+            dayTotals[day] = (dayTotals[day] || 0) + 1;
+          }
+        });
+
+        const mostProductiveDay =
+          Object.keys(dayTotals).length > 0
+            ? Object.keys(dayTotals).reduce((a, b) =>
+                dayTotals[a] > dayTotals[b] ? a : b
+              )
+            : "No data";
+
+        // Find most productive time
+        const hourTotals = {};
+        filteredTasks.forEach((task) => {
+          if (task && task.completedAt) {
+            const hour = new Date(task.completedAt).getHours();
+            hourTotals[hour] = (hourTotals[hour] || 0) + 1;
+          }
+        });
+
+        const mostProductiveHour =
+          Object.keys(hourTotals).length > 0
+            ? Object.keys(hourTotals).reduce((a, b) =>
+                hourTotals[a] > hourTotals[b] ? a : b
+              )
+            : null;
+
+        const mostProductiveTime = mostProductiveHour
+          ? formatHour(parseInt(mostProductiveHour))
+          : "No data";
+
+        if (isMounted) {
+          // Set analytics data
+          setAnalyticsData({
+            taskCompletion: taskCompletionData,
+            focusTime: focusTimeData,
+            labels: dateLabels,
+            streak: streakCount,
+            mostProductiveDay,
+            mostProductiveTime,
+          });
+
+          setIsLoading(false);
+        }
+      } catch (error) {
+        console.error("Error generating analytics:", error);
+
+        if (isMounted) {
+          // Set default data on error
+          setAnalyticsData({
+            taskCompletion: [],
+            focusTime: [],
+            labels: [],
+            streak: streakCount,
+            mostProductiveDay: "No data",
+            mostProductiveTime: "No data",
+          });
+
+          setIsLoading(false);
+        }
+      }
+    };
+
+    generateAnalytics();
+
+    // Cleanup function to prevent state updates if component unmounts
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    timeRange,
+    completedTasks,
+    focusHistory,
+    streakCount,
+    generateDateLabels,
+    calculateDailyMetrics,
+    formatHour,
+  ]);
 
   // Calculate productivity score (0-100)
-  const calculateProductivityScore = () => {
+  const calculateProductivityScore = useCallback(() => {
     if (
       !analyticsData.taskCompletion ||
+      !Array.isArray(analyticsData.taskCompletion) ||
       analyticsData.taskCompletion.length === 0
     )
       return 0;
@@ -279,15 +315,78 @@ const InsightsScreen = () => {
 
     // Average focus minutes per day
     const avgFocus =
-      analyticsData.focusTime.reduce((sum, val) => sum + val, 0) /
-      analyticsData.focusTime.length;
+      analyticsData.focusTime &&
+      Array.isArray(analyticsData.focusTime) &&
+      analyticsData.focusTime.length > 0
+        ? analyticsData.focusTime.reduce((sum, val) => sum + val, 0) /
+          analyticsData.focusTime.length
+        : 0;
 
     // Calculate score based on tasks (max 50 points) and focus time (max 50 points)
     const taskScore = Math.min(avgTasks * 10, 50); // 5 tasks a day would be perfect
     const focusScore = Math.min(avgFocus / 4, 50); // 200 minutes a day would be perfect
 
     return Math.round(taskScore + focusScore);
-  };
+  }, [analyticsData.taskCompletion, analyticsData.focusTime]);
+
+  // Generate a summary based on the analytics data
+  const generateSummary = useCallback(
+    (taskCompletion, focusTime, streak, score) => {
+      // Calculate averages
+      const avgTasks =
+        taskCompletion && taskCompletion.length > 0
+          ? taskCompletion.reduce((sum, val) => sum + val, 0) /
+            taskCompletion.length
+          : 0;
+
+      const avgFocus =
+        focusTime && focusTime.length > 0
+          ? focusTime.reduce((sum, val) => sum + val, 0) / focusTime.length
+          : 0;
+
+      // Generate encouraging messages based on data
+      let message = "";
+
+      if (score >= 80) {
+        message =
+          "Excellent work! You're showing high productivity levels. Keep up the great momentum!";
+      } else if (score >= 60) {
+        message =
+          "Good job! You're maintaining a solid productivity level. Keep building those habits!";
+      } else if (score >= 40) {
+        message =
+          "You're making progress! Try to increase your focus sessions for even better results.";
+      } else if (score >= 20) {
+        message =
+          "You're taking steps in the right direction. Try setting smaller, achievable goals.";
+      } else {
+        message =
+          "Getting started is the hardest part. Try using the focus timer for just 5 minutes today.";
+      }
+
+      return `You've completed an average of ${avgTasks.toFixed(
+        1
+      )} tasks per day and focused for an average of ${avgFocus.toFixed(
+        1
+      )} minutes. You're on a ${streak}-day streak. ${message}`;
+    },
+    []
+  );
+
+  const productivityScore = useMemo(
+    () => calculateProductivityScore(),
+    [calculateProductivityScore]
+  );
+  const summary = useMemo(
+    () =>
+      generateSummary(
+        analyticsData.taskCompletion,
+        analyticsData.focusTime,
+        analyticsData.streak,
+        productivityScore
+      ),
+    [analyticsData, productivityScore, generateSummary]
+  );
 
   return (
     <ScrollView style={styles.container}>
@@ -354,9 +453,7 @@ const InsightsScreen = () => {
           <View style={styles.scoreCard}>
             <Text style={styles.scoreTitle}>Productivity Score</Text>
             <View style={styles.scoreCircle}>
-              <Text style={styles.scoreNumber}>
-                {calculateProductivityScore()}
-              </Text>
+              <Text style={styles.scoreNumber}>{productivityScore}</Text>
             </View>
             <Text style={styles.scoreHint}>
               Based on your task completion rate and focus time
@@ -366,7 +463,8 @@ const InsightsScreen = () => {
           {/* Task Completion Chart */}
           <View style={styles.chartCard}>
             <Text style={styles.chartTitle}>Tasks Completed</Text>
-            {analyticsData.taskCompletion.length > 0 ? (
+            {analyticsData.taskCompletion &&
+            analyticsData.taskCompletion.length > 0 ? (
               <LineChart
                 data={analyticsData.taskCompletion}
                 labels={analyticsData.labels}
@@ -382,7 +480,7 @@ const InsightsScreen = () => {
           {/* Focus Time Chart */}
           <View style={styles.chartCard}>
             <Text style={styles.chartTitle}>Focus Time (minutes)</Text>
-            {analyticsData.focusTime.length > 0 ? (
+            {analyticsData.focusTime && analyticsData.focusTime.length > 0 ? (
               <LineChart
                 data={analyticsData.focusTime}
                 labels={analyticsData.labels}
@@ -424,7 +522,8 @@ const InsightsScreen = () => {
             <View style={styles.insightCard}>
               <Ionicons name="checkmark-done" size={24} color="#9B59B6" />
               <Text style={styles.insightValue}>
-                {analyticsData.taskCompletion
+                {analyticsData.taskCompletion &&
+                Array.isArray(analyticsData.taskCompletion)
                   ? analyticsData.taskCompletion.reduce(
                       (sum, val) => sum + val,
                       0
@@ -438,60 +537,12 @@ const InsightsScreen = () => {
           {/* Summary */}
           <View style={styles.summaryCard}>
             <Text style={styles.summaryTitle}>Summary</Text>
-            <Text style={styles.summaryText}>
-              {generateSummary(
-                analyticsData.taskCompletion || [],
-                analyticsData.focusTime || [],
-                analyticsData.streak || 0,
-                calculateProductivityScore()
-              )}
-            </Text>
+            <Text style={styles.summaryText}>{summary}</Text>
           </View>
         </>
       )}
     </ScrollView>
   );
-};
-
-// Generate a summary based on the analytics data
-const generateSummary = (taskCompletion, focusTime, streak, score) => {
-  // Calculate averages
-  const avgTasks =
-    taskCompletion.length > 0
-      ? taskCompletion.reduce((sum, val) => sum + val, 0) /
-        taskCompletion.length
-      : 0;
-
-  const avgFocus =
-    focusTime.length > 0
-      ? focusTime.reduce((sum, val) => sum + val, 0) / focusTime.length
-      : 0;
-
-  // Generate encouraging messages based on data
-  let message = "";
-
-  if (score >= 80) {
-    message =
-      "Excellent work! You're showing high productivity levels. Keep up the great momentum!";
-  } else if (score >= 60) {
-    message =
-      "Good job! You're maintaining a solid productivity level. Keep building those habits!";
-  } else if (score >= 40) {
-    message =
-      "You're making progress! Try to increase your focus sessions for even better results.";
-  } else if (score >= 20) {
-    message =
-      "You're taking steps in the right direction. Try setting smaller, achievable goals.";
-  } else {
-    message =
-      "Getting started is the hardest part. Try using the focus timer for just 5 minutes today.";
-  }
-
-  return `You've completed an average of ${avgTasks.toFixed(
-    1
-  )} tasks per day and focused for an average of ${avgFocus.toFixed(
-    1
-  )} minutes. You're on a ${streak}-day streak. ${message}`;
 };
 
 const { width } = Dimensions.get("window");
