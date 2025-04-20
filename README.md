@@ -1,50 +1,234 @@
-# Welcome to your Expo app 👋
+# LazyBuster
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A productivity app designed to help overcome procrastination, stay focused, and achieve goals through effective task management, focus timers, and self-reflection.
 
-## Get started
+## Overview
 
-1. Install dependencies
+LazyBuster is a mobile application built with Expo and React Native that helps users who struggle with procrastination and staying on task. It combines task management with focus techniques, reality checks, and analytics to build better productivity habits.
 
-   ```bash
-   npm install
-   ```
+The app works completely offline and client-side with no backend requirements, making it accessible anywhere and ensuring your productivity data stays private.
 
-2. Start the app
+## Features
 
-   ```bash
-    npx expo start
-   ```
+### Implemented Features
 
-In the output, you'll find options to open the app in a
+#### Task Management
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+- ✅ Create tasks with title, description, priority, category, and due date
+- ✅ Mark tasks as complete with swipe actions
+- ✅ Support for recurring tasks (daily, weekly, monthly)
+- ✅ Task filtering and sorting by various criteria
+- ✅ Task priority levels (high, medium, low)
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+#### Focus Timer (Pomodoro Technique)
 
-## Get a fresh project
+- ✅ Customizable work and break sessions
+- ✅ Track focus time statistics
+- ✅ Associate focus sessions with specific tasks
+- ✅ Visual progress indicators
 
-When you're ready, run:
+#### Reality Check System
 
-```bash
-npm run reset-project
+- ✅ Personalized reminders based on task status
+- ✅ Motivational quotes and encouragement
+- ✅ Streak tracking for consistent productivity
+- ✅ Daily check-ins to maintain momentum
+
+#### Journaling
+
+- ✅ Daily reflection on accomplishments
+- ✅ Guided prompts for self-reflection
+- ✅ Historical record of productivity insights
+
+#### Analytics & Insights
+
+- ✅ Productivity score calculation
+- ✅ Task completion charts
+- ✅ Focus time tracking and visualization
+- ✅ Personalized productivity recommendations
+
+#### Additional Features
+
+- ✅ Offline storage with AsyncStorage
+- ✅ Clean, intuitive UI
+- ✅ Light/dark mode support
+- ✅ Local notifications for task reminders
+
+### Features to Implement
+
+#### Enhanced Task Management
+
+- ⬜ Task import/export functionality
+- ⬜ Task templates for common activities
+- ⬜ Sub-tasks for breaking down complex tasks
+- ⬜ Task tagging and advanced filtering
+- ⬜ Task sharing and collaboration features
+
+#### Advanced Focus Tools
+
+- ⬜ Background ambient sounds for focus sessions
+- ⬜ Website/app blocking during focus sessions
+- ⬜ Advanced focus statistics and trends
+- ⬜ Focus challenges and achievements
+
+#### Improved Analytics
+
+- ⬜ Weekly and monthly productivity reports
+- ⬜ Productivity insights across different categories
+- ⬜ Export of analytics data
+- ⬜ AI-powered productivity recommendations
+
+#### Enhanced User Experience
+
+- ⬜ Custom themes and appearance options
+- ⬜ Widgets for home screen access
+- ⬜ Voice input for quick task creation
+- ⬜ Improved accessibility features
+
+## Technical Details
+
+### Project Structure
+
+```
+LazyBuster/
+├── app/
+│   ├── addTask.js                # Task creation/editing screen
+│   ├── _layout.js                # Root layout with providers
+│   ├── +not-found.js             # 404 screen
+│   └── (tabs)/                   # Main tab navigation
+│       ├── index.js              # Home tab
+│       ├── insights.js           # Analytics tab
+│       ├── journal.js            # Journal tab
+│       ├── _layout.js            # Tab navigation layout
+│       ├── settings.js           # Settings tab
+│       ├── tasks.js              # Tasks management tab
+│       └── timer.js              # Focus timer tab
+├── assets/                       # Images and fonts
+├── components/                   # Reusable UI components
+│   ├── FocusTimer.js             # Pomodoro timer component
+│   ├── PriorityPicker.js         # Task priority selector
+│   ├── ProgressBar.js            # Visual progress indicator
+│   ├── RealityCheck.js           # Reality check popup
+│   └── TaskItem.js               # Individual task item component
+├── constants/                    # App constants
+│   ├── colors.js                 # Color definitions
+│   └── presets.js                # App presets and configurations
+├── context/                      # React Context providers
+│   ├── TaskContext.js            # Task management context
+│   └── TimerContext.js           # Focus timer context
+├── screens/                      # Screen components
+├── utils/                        # Utility functions
+│   ├── analytics.js              # Analytics processing
+│   ├── notifications.js          # Local notifications
+│   └── storage.js                # AsyncStorage management
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Technology Stack
 
-## Learn more
+- **Framework**: React Native with Expo
+- **Navigation**: Expo Router
+- **State Management**: React Context API
+- **Storage**: AsyncStorage
+- **UI Components**: Custom components with native elements
+- **Notifications**: Expo Notifications
+- **Styling**: StyleSheet API with custom theme system
 
-To learn more about developing your project with Expo, look at the following resources:
+## How It Works
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### Task Management
 
-## Join the community
+The app uses TaskContext to manage all task-related operations. Tasks are stored locally using AsyncStorage and can be created, updated, completed, and deleted. The tasks include properties like priority, due date, category, and recurring settings.
 
-Join our community of developers creating universal apps.
+Tasks can be filtered and sorted by various criteria, helping users focus on what matters most. Swiping actions provide quick ways to mark tasks as complete or delete them.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+### Focus Timer
+
+The Pomodoro technique is implemented through the TimerContext. Users can set custom durations for focus sessions and breaks, and the timer automatically cycles between them. The app tracks focus time statistics and allows users to associate focus sessions with specific tasks.
+
+### Reality Checks
+
+The RealityCheck component provides timely reminders based on the user's task status. It analyzes overdue tasks, high-priority items, and today's schedule to generate personalized "reality checks" that help users stay on track.
+
+### Analytics
+
+The InsightsScreen provides visualization of productivity data, helping users understand their patterns and improve their habits. It shows task completion rates, focus time statistics, and calculates an overall productivity score. The analytics engine also generates personalized recommendations based on the user's data.
+
+### Storage System
+
+All data is stored locally using AsyncStorage, with a robust utility layer (storage.js) that handles saving and retrieving data with proper error handling. This ensures data persistence even when the app is closed.
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js (LTS version)
+- npm or yarn
+- Expo CLI
+
+### Installation
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/yourusername/LazyBuster.git
+cd LazyBuster
+```
+
+2. Install dependencies:
+
+```bash
+npm install
+# or
+yarn install
+```
+
+3. Start the development server:
+
+```bash
+npx expo start
+```
+
+4. Open the app on your device or emulator:
+   - Scan the QR code with the Expo Go app on your device
+   - Press 'a' to open on Android emulator
+   - Press 'i' to open on iOS simulator
+
+## Troubleshooting
+
+### Common Issues
+
+#### DateTimePicker Issues
+
+If you encounter issues with the DateTimePicker component, it's a known limitation in Expo Go. The app implements a custom date picker solution to work around this.
+
+#### Gesture Handler Errors
+
+Make sure to wrap your app with `GestureHandlerRootView` in the root component to enable swipe actions.
+
+#### Notification Limitations
+
+Push notifications have limited functionality in Expo Go. For full notification support, use a development build.
+
+### Resolving Issues
+
+1. Clear the cache and restart:
+
+```bash
+npx expo start --clear
+```
+
+2. Ensure all dependencies are correctly installed:
+
+```bash
+npm install
+```
+
+3. Check for React Native version compatibility issues.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
