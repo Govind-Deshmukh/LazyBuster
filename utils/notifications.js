@@ -2,11 +2,14 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { Platform, Alert } from "react-native";
+import * as Permissions from "expo-permissions";
+import { Audio } from "expo-av";
 
-// Flag to track if we're in Expo Go (to handle limitations)
-let isExpoGo = false;
+// Track if notifications are available (not in Expo Go or simulator)
+let notificationsAvailable = true;
+let permissionsGranted = false;
 
-// Configure notifications behavior
+// Try to set up notification handling
 try {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
@@ -17,19 +20,12 @@ try {
   });
 } catch (error) {
   console.warn("Error setting up notification handler:", error);
-  isExpoGo = true;
+  notificationsAvailable = false;
 }
 
-// Request notification permissions
-export const registerForPushNotificationsAsync = async () => {
-  if (isExpoGo) {
-    console.warn("Push notifications have limited functionality in Expo Go");
-    return null;
-  }
-
+// Initialize notification permissions
+const initializeNotifications = async () => {
   try {
-    let token;
-
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("default", {
         name: "default",
@@ -39,79 +35,117 @@ export const registerForPushNotificationsAsync = async () => {
       });
     }
 
+    const { status: existingStatus } =
+      await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== "granted") {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    permissionsGranted = finalStatus === "granted";
+    return permissionsGranted;
+  } catch (error) {
+    console.warn("Error initializing notifications:", error);
+    return false;
+  }
+};
+
+// Call initialization
+initializeNotifications();
+
+// Request notification permissions
+export const registerForPushNotificationsAsync = async () => {
+  if (!notificationsAvailable) {
+    console.log("Notifications have limited functionality in this environment");
+    return null;
+  }
+
+  try {
+    let token = null;
+
     if (Device.isDevice) {
-      const { status: existingStatus } =
-        await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-
-      if (existingStatus !== "granted") {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-
-      if (finalStatus !== "granted") {
-        console.log("Failed to get push token for push notification!");
-        return null;
-      }
-
-      // Only attempt to get push token if permissions are granted
-      if (finalStatus === "granted") {
-        try {
-          token = (
-            await Notifications.getExpoPushTokenAsync({
-              projectId: Constants.expoConfig?.extra?.eas?.projectId,
-            })
-          ).data;
-        } catch (error) {
-          console.warn("Error getting push token:", error);
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== "granted") {
+        const { status: newStatus } =
+          await Notifications.requestPermissionsAsync();
+        if (newStatus !== "granted") {
+          console.log("Notification permissions denied");
+          return null;
         }
+        permissionsGranted = true;
+      }
+
+      try {
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+        if (projectId) {
+          const tokenData = await Notifications.getExpoPushTokenAsync({
+            projectId,
+          });
+          token = tokenData.data;
+        } else {
+          console.log("No project ID found for push notifications");
+        }
+      } catch (error) {
+        console.warn("Error getting push token:", error);
       }
     } else {
-      console.log("Must use physical device for push notifications");
+      console.log("Push notifications require a physical device");
     }
 
     return token;
   } catch (error) {
-    console.warn("Error in registerForPushNotificationsAsync:", error);
+    console.warn("Error registering for push notifications:", error);
     return null;
   }
 };
 
-// Schedule a task reminder notification with fallback for Expo Go
+// Schedule a task reminder notification with fallback
 export const scheduleTaskReminder = async (task) => {
-  if (!task.dueDate) return null;
-
-  const dueDate = new Date(task.dueDate);
-  const now = new Date();
-
-  // Don't schedule if the due date is in the past
-  if (dueDate <= now) return null;
-
-  // Schedule reminder 30 minutes before due time
-  const triggerDate = new Date(dueDate);
-  triggerDate.setMinutes(triggerDate.getMinutes() - 30);
-
-  // If that would be in the past, don't schedule
-  if (triggerDate <= now) return null;
-
   try {
-    if (isExpoGo) {
-      // Just return a dummy ID in Expo Go
-      return "expo-go-limited-" + Date.now().toString();
+    if (!task || !task.dueDate) return null;
+
+    // Don't schedule if notifications aren't available
+    if (!notificationsAvailable || !permissionsGranted) {
+      console.log("Notifications not available, skipping reminder");
+      return null;
     }
+
+    const dueDate = new Date(task.dueDate);
+    const now = new Date();
+
+    // Don't schedule if the due date is in the past
+    if (dueDate <= now) return null;
+
+    // Schedule reminder 30 minutes before due time
+    const triggerDate = new Date(dueDate);
+    triggerDate.setMinutes(triggerDate.getMinutes() - 30);
+
+    // If reminder time would be in the past, don't schedule
+    if (triggerDate <= now) return null;
 
     const identifier = await Notifications.scheduleNotificationAsync({
       content: {
         title: "Task Reminder",
         body: `Your task "${task.title}" is due soon!`,
         data: { taskId: task.id },
+        sound: true,
       },
       trigger: triggerDate,
     });
 
     return identifier;
   } catch (error) {
-    console.error("Error scheduling notification:", error);
+    console.error("Error scheduling task reminder:", error);
+    // Fallback to alert if available in this context
+    try {
+      if (task && task.title) {
+        Alert.alert("Task Reminder", `Your task "${task.title}" is due soon!`);
+      }
+    } catch (alertError) {
+      // Silent failure for non-UI contexts
+    }
     return null;
   }
 };
@@ -120,8 +154,8 @@ export const scheduleTaskReminder = async (task) => {
 export const cancelNotification = async (identifier) => {
   if (!identifier) return;
 
-  if (isExpoGo) {
-    // No-op in Expo Go
+  if (!notificationsAvailable) {
+    console.log("Notifications not available, can't cancel");
     return;
   }
 
@@ -134,11 +168,9 @@ export const cancelNotification = async (identifier) => {
 
 // Schedule a daily reality check notification
 export const scheduleDailyRealityCheck = async (hour = 9, minute = 0) => {
-  if (isExpoGo) {
-    console.log(
-      "Reality check notifications have limited functionality in Expo Go"
-    );
-    return "expo-go-limited-" + Date.now().toString();
+  if (!notificationsAvailable || !permissionsGranted) {
+    console.log("Reality check notifications have limited functionality");
+    return null;
   }
 
   try {
@@ -150,6 +182,7 @@ export const scheduleDailyRealityCheck = async (hour = 9, minute = 0) => {
         title: "Daily Reality Check",
         body: "Time to review your goals and tasks for today!",
         data: { type: "realityCheck" },
+        sound: true,
       },
       trigger: {
         hour,
@@ -167,8 +200,7 @@ export const scheduleDailyRealityCheck = async (hour = 9, minute = 0) => {
 
 // Cancel all reality check notifications
 export const cancelRealityCheckNotifications = async () => {
-  if (isExpoGo) {
-    // No-op in Expo Go
+  if (!notificationsAvailable) {
     return;
   }
 
@@ -188,16 +220,14 @@ export const cancelRealityCheckNotifications = async () => {
   }
 };
 
-// Schedule hourly reality check notifications (for intense focus periods)
+// Schedule hourly reality checks for focused work periods
 export const scheduleHourlyRealityChecks = async (
   startHour = 9,
   endHour = 17
 ) => {
-  if (isExpoGo) {
-    console.log(
-      "Reality check notifications have limited functionality in Expo Go"
-    );
-    return ["expo-go-limited-" + Date.now().toString()];
+  if (!notificationsAvailable || !permissionsGranted) {
+    console.log("Reality check notifications have limited functionality");
+    return [];
   }
 
   try {
@@ -212,6 +242,7 @@ export const scheduleHourlyRealityChecks = async (
           title: "Reality Check",
           body: "Are you staying focused on your priorities?",
           data: { type: "realityCheck" },
+          sound: true,
         },
         trigger: {
           hour,
@@ -227,126 +258,5 @@ export const scheduleHourlyRealityChecks = async (
   } catch (error) {
     console.error("Error scheduling hourly reality checks:", error);
     return [];
-  }
-};
-
-// Schedule a streak maintenance reminder
-export const scheduleStreakReminder = async (hour = 20, minute = 0) => {
-  if (isExpoGo) {
-    console.log("Streak reminders have limited functionality in Expo Go");
-    return "expo-go-limited-" + Date.now().toString();
-  }
-
-  try {
-    const identifier = await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "Maintain Your Streak!",
-        body: "You haven't completed any tasks today. Keep your streak going!",
-        data: { type: "streakReminder" },
-      },
-      trigger: {
-        hour,
-        minute,
-        repeats: true,
-      },
-    });
-
-    return identifier;
-  } catch (error) {
-    console.error("Error scheduling streak reminder:", error);
-    return null;
-  }
-};
-
-// Show a motivational notification immediately
-export const showMotivationalNotification = async (
-  message = "You can do this! Stay focused on your goals!"
-) => {
-  try {
-    if (isExpoGo) {
-      // Use Alert as a fallback in Expo Go
-      Alert.alert("Motivation Boost", message);
-      return;
-    }
-
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "Motivation Boost",
-        body: message,
-      },
-      trigger: null, // Show immediately
-    });
-  } catch (error) {
-    console.error("Error showing motivational notification:", error);
-    // Fallback to Alert
-    Alert.alert("Motivation Boost", message);
-  }
-};
-
-// Show a timer completed notification
-export const showTimerCompletedNotification = async (timerType) => {
-  let title, body;
-
-  if (timerType === "pomodoro") {
-    title = "Focus Session Complete!";
-    body = "Great job! Take a break now.";
-  } else if (timerType === "shortBreak") {
-    title = "Break Time Over";
-    body = "Ready to focus again?";
-  } else if (timerType === "longBreak") {
-    title = "Long Break Complete";
-    body = "Time to get back to work!";
-  }
-
-  try {
-    if (isExpoGo) {
-      // Use Alert as a fallback in Expo Go
-      Alert.alert(title, body);
-      return;
-    }
-
-    await Notifications.scheduleNotificationAsync({
-      content: { title, body },
-      trigger: null, // Show immediately
-    });
-  } catch (error) {
-    console.error("Error showing timer notification:", error);
-    // Fallback to Alert
-    Alert.alert(title, body);
-  }
-};
-
-// Schedule based on app settings
-export const configureNotificationsBasedOnSettings = async (settings) => {
-  if (isExpoGo) {
-    console.log(
-      "Notification configuration has limited functionality in Expo Go"
-    );
-    return;
-  }
-
-  if (!settings.notificationsEnabled) {
-    // Cancel all notifications if disabled
-    try {
-      await Notifications.cancelAllScheduledNotificationsAsync();
-    } catch (error) {
-      console.error("Error canceling all notifications:", error);
-    }
-    return;
-  }
-
-  // Schedule reality checks based on frequency setting
-  if (settings.realityCheckFrequency === "daily") {
-    await scheduleDailyRealityCheck();
-  } else if (settings.realityCheckFrequency === "hourly") {
-    await scheduleHourlyRealityChecks();
-  } else {
-    // If 'off', cancel any existing reality check notifications
-    await cancelRealityCheckNotifications();
-  }
-
-  // Schedule streak reminder if enabled
-  if (settings.streakReminderEnabled) {
-    await scheduleStreakReminder();
   }
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,72 +7,154 @@ import {
   Modal,
   Animated,
   Dimensions,
+  Vibration,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Audio } from "expo-av";
 import { useTaskContext } from "../context/TaskContext";
+import { useTimerContext } from "../context/TimerContext";
 import {
   MOTIVATIONAL_QUOTES,
   REALITY_CHECK_SEVERITY,
 } from "../constants/presets";
 import * as storage from "../utils/storage";
-import Colors from "@/constants/color";
+import Colors from "../constants/color";
 
 const { width } = Dimensions.get("window");
 
 const RealityCheck = ({ onClose }) => {
-  const { getRealityCheck, getTasksDueToday, getOverdueTasks } =
-    useTaskContext();
+  // Get context data with safe fallbacks
+  const taskContext = useTaskContext() || {};
+  const timerContext = useTimerContext() || {};
+
+  // Extract methods with safe fallbacks
+  const getRealityCheck = taskContext.getRealityCheck;
+  const getTasksDueToday = taskContext.getTasksDueToday;
+  const getOverdueTasks = taskContext.getOverdueTasks;
+  const getTasksCompletedToday = taskContext.getTasksCompletedToday;
+  const getFocusStats = timerContext.getFocusStats;
+
   const [visible, setVisible] = useState(true);
   const [slideAnimation] = useState(new Animated.Value(0));
   const [quote, setQuote] = useState("");
+  const [sound, setSound] = useState(null);
 
-  // Get reality check message and severity
-  const { message, severity } = getRealityCheck();
+  // Get reality check data
+  const realityCheck = getRealityCheck
+    ? getRealityCheck()
+    : { message: "Stay focused on your tasks!", severity: "normal" };
 
-  // Get stats for today
-  const todayTasks = getTasksDueToday();
-  const overdueTasks = getOverdueTasks();
+  // Get task data with safe defaults
+  const todayTasks = getTasksDueToday ? getTasksDueToday() : [];
+  const overdueTasks = getOverdueTasks ? getOverdueTasks() : [];
+  const completedTasks = getTasksCompletedToday ? getTasksCompletedToday() : [];
 
-  // Get severity icon and color
+  // Get focus stats with safe defaults
+  const focusStats = getFocusStats
+    ? getFocusStats()
+    : { todayTime: 0, totalTime: 0 };
+
+  // Get severity styling
   const severityInfo =
-    REALITY_CHECK_SEVERITY[severity] || REALITY_CHECK_SEVERITY.normal;
+    REALITY_CHECK_SEVERITY[realityCheck.severity] ||
+    REALITY_CHECK_SEVERITY.normal;
 
-  // Select a random motivational quote on mount
+  // Load and play sound
   useEffect(() => {
+    const loadSound = async () => {
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          require("../assets/notification.mp3")
+        );
+        setSound(sound);
+        await sound.playAsync();
+      } catch (error) {
+        console.warn("Could not load or play sound", error);
+      }
+    };
+
+    loadSound();
+
+    // Try to vibrate device
+    try {
+      Vibration.vibrate(500);
+    } catch (error) {
+      console.warn("Vibration not supported", error);
+    }
+
+    // Cleanup sound on unmount
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
+  }, []);
+
+  // Select a motivational quote and start animation
+  useEffect(() => {
+    // Get a random quote
     const randomIndex = Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length);
     setQuote(MOTIVATIONAL_QUOTES[randomIndex]);
 
-    // Start animation
+    // Start slide-in animation
     Animated.timing(slideAnimation, {
       toValue: 1,
-      duration: 300,
+      duration: 400,
       useNativeDriver: true,
     }).start();
+
+    // Record that this reality check was shown
+    storage.saveRealityCheckDismissed(new Date());
   }, []);
 
-  // Handle close
-  const handleClose = async () => {
+  // Format focus time for display
+  const formatFocusTime = useCallback((minutes) => {
+    if (minutes < 60) {
+      return `${minutes} min`;
+    } else {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    }
+  }, []);
+
+  // Handle close action
+  const handleClose = useCallback(() => {
+    // Play sound when closing
+    if (sound) {
+      sound.playAsync().catch((error) => {
+        console.warn("Error playing sound on close:", error);
+      });
+    }
+
     // Animate out
     Animated.timing(slideAnimation, {
       toValue: 0,
-      duration: 200,
+      duration: 300,
       useNativeDriver: true,
     }).start(() => {
       setVisible(false);
-      storage.saveRealityCheckDismissed(new Date());
-
       if (onClose) {
         onClose();
       }
     });
-  };
+  }, [sound, onClose, slideAnimation]);
 
-  // Handle transform based on animation
+  // Handle focus now action - closes but also signals intent to focus
+  const handleFocusNow = useCallback(() => {
+    // We could add additional logic here to navigate to timer
+    // or start a focus session automatically
+
+    handleClose();
+  }, [handleClose]);
+
+  // Animation values
   const translateY = slideAnimation.interpolate({
     inputRange: [0, 1],
     outputRange: [400, 0],
   });
 
+  // Don't render if not visible
   if (!visible) return null;
 
   return (
@@ -101,7 +183,7 @@ const RealityCheck = ({ onClose }) => {
               { borderColor: severityInfo.color },
             ]}
           >
-            <Text style={styles.message}>{message}</Text>
+            <Text style={styles.message}>{realityCheck.message}</Text>
           </View>
 
           {/* Stats */}
@@ -125,14 +207,37 @@ const RealityCheck = ({ onClose }) => {
 
             <View style={styles.statItem}>
               <Text style={styles.statValue}>
-                {Math.round(
-                  (todayTasks.filter((t) => t.completed).length /
-                    Math.max(todayTasks.length, 1)) *
-                    100
-                )}
-                %
+                {formatFocusTime(focusStats.todayTime || 0)}
               </Text>
-              <Text style={styles.statLabel}>Completed</Text>
+              <Text style={styles.statLabel}>Focus Today</Text>
+            </View>
+          </View>
+
+          {/* Completion progress */}
+          <View style={styles.progressContainer}>
+            <View style={styles.progressHeader}>
+              <Text style={styles.progressLabel}>Daily Tasks Completed</Text>
+              <Text style={styles.progressValue}>
+                {completedTasks.length}/
+                {completedTasks.length + todayTasks.length}
+              </Text>
+            </View>
+            <View style={styles.progressBarContainer}>
+              <View
+                style={[
+                  styles.progressBar,
+                  {
+                    width: `${calculateCompletionPercentage(
+                      completedTasks.length,
+                      todayTasks.length
+                    )}%`,
+                    backgroundColor: getProgressColor(
+                      completedTasks.length,
+                      todayTasks.length
+                    ),
+                  },
+                ]}
+              />
             </View>
           </View>
 
@@ -145,9 +250,15 @@ const RealityCheck = ({ onClose }) => {
           <View style={styles.buttonsContainer}>
             <TouchableOpacity
               style={[styles.button, styles.primaryButton]}
-              onPress={handleClose}
+              onPress={handleFocusNow}
             >
-              <Text style={styles.primaryButtonText}>I'll Focus Now</Text>
+              <Ionicons
+                name="timer-outline"
+                size={18}
+                color="white"
+                style={styles.buttonIcon}
+              />
+              <Text style={styles.primaryButtonText}>Start Focusing</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -161,6 +272,22 @@ const RealityCheck = ({ onClose }) => {
       </View>
     </Modal>
   );
+};
+
+// Helper function to calculate completion percentage
+const calculateCompletionPercentage = (completed, remaining) => {
+  const total = completed + remaining;
+  if (total === 0) return 100; // If no tasks, show as 100% complete
+  return Math.round((completed / total) * 100);
+};
+
+// Helper function to get appropriate color based on progress
+const getProgressColor = (completed, remaining) => {
+  const percentage = calculateCompletionPercentage(completed, remaining);
+
+  if (percentage >= 75) return Colors.success;
+  if (percentage >= 40) return Colors.warning;
+  return Colors.error;
 };
 
 const styles = StyleSheet.create({
@@ -228,6 +355,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.gray600,
   },
+  progressContainer: {
+    marginBottom: 20,
+  },
+  progressHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  progressLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.gray700,
+  },
+  progressValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.primary,
+  },
+  progressBarContainer: {
+    height: 8,
+    backgroundColor: Colors.gray200,
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  progressBar: {
+    height: "100%",
+    backgroundColor: Colors.success,
+    borderRadius: 4,
+  },
   quoteContainer: {
     backgroundColor: Colors.gray100,
     borderRadius: 12,
@@ -257,6 +414,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: Colors.primary,
+    flexDirection: "row",
   },
   primaryButtonText: {
     color: "white",
@@ -270,6 +428,9 @@ const styles = StyleSheet.create({
     color: Colors.gray700,
     fontWeight: "600",
     fontSize: 16,
+  },
+  buttonIcon: {
+    marginRight: 8,
   },
 });
 

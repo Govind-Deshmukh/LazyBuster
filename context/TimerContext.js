@@ -4,9 +4,11 @@ import React, {
   useEffect,
   useContext,
   useRef,
+  useCallback,
 } from "react";
 import * as storage from "../utils/storage";
 import { useTaskContext } from "./TaskContext";
+import { Audio } from "expo-av";
 
 // Create the context
 export const TimerContext = createContext();
@@ -32,11 +34,39 @@ export const TimerProvider = ({ children }) => {
   const [currentTaskId, setCurrentTaskId] = useState(null);
   const [totalFocusTime, setTotalFocusTime] = useState(0);
   const [todayFocusTime, setTodayFocusTime] = useState(0);
+  const [focusHistory, setFocusHistory] = useState([]);
 
   const intervalRef = useRef(null);
   const startTimeRef = useRef(null);
+  const soundRef = useRef(null);
 
-  const { updateTaskTime } = useTaskContext();
+  const { updateTaskTime } = useTaskContext
+    ? useTaskContext()
+    : { updateTaskTime: null };
+
+  // Preload sounds
+  useEffect(() => {
+    const loadSounds = async () => {
+      try {
+        // We'll preload the notification sound
+        const { sound } = await Audio.Sound.createAsync(
+          require("../assets/notification.mp3")
+        );
+        soundRef.current = sound;
+      } catch (error) {
+        console.warn("Failed to load sounds:", error);
+      }
+    };
+
+    loadSounds();
+
+    // Cleanup on unmount
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+      }
+    };
+  }, []);
 
   // Load settings and stats on mount
   useEffect(() => {
@@ -81,6 +111,12 @@ export const TimerProvider = ({ children }) => {
             storage.saveTodayFocusTimeDate(today);
           }
         }
+
+        // Load focus history (create a default if not found)
+        const history = await storage.getItem("focusHistory");
+        if (history) {
+          setFocusHistory(JSON.parse(history));
+        }
       } catch (error) {
         console.error("Failed to load timer data:", error);
         // Use defaults if there's an error
@@ -121,19 +157,34 @@ export const TimerProvider = ({ children }) => {
     };
   }, [isRunning]);
 
-  // Handle timer completion
-  const handleTimerComplete = async () => {
-    setIsRunning(false);
-    clearInterval(intervalRef.current);
-    intervalRef.current = null;
+  // Play notification sound
+  const playNotificationSound = async () => {
+    try {
+      if (soundRef.current) {
+        await soundRef.current.setPositionAsync(0);
+        await soundRef.current.playAsync();
+      }
+    } catch (error) {
+      console.error("Error playing sound:", error);
+    }
+  };
 
-    // Play sound or vibrate to notify completion
+  // Handle timer completion - using useCallback to prevent rerenders
+  const handleTimerComplete = useCallback(async () => {
+    setIsRunning(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    // Play sound to notify completion
+    playNotificationSound();
 
     if (timerType === "pomodoro") {
       // Update completed sessions
       const newCompletedSessions = completedSessions + 1;
       setCompletedSessions(newCompletedSessions);
-      storage.saveCompletedSessions(newCompletedSessions);
+      await storage.saveCompletedSessions(newCompletedSessions);
 
       // Update focus time
       const sessionMinutes = timerSettings.pomodoro;
@@ -143,12 +194,24 @@ export const TimerProvider = ({ children }) => {
       setTotalFocusTime(newTotalFocusTime);
       setTodayFocusTime(newTodayFocusTime);
 
-      storage.saveTotalFocusTime(newTotalFocusTime);
-      storage.saveTodayFocusTime(newTodayFocusTime);
-      storage.saveTodayFocusTimeDate(new Date().toDateString());
+      await storage.saveTotalFocusTime(newTotalFocusTime);
+      await storage.saveTodayFocusTime(newTodayFocusTime);
+      await storage.saveTodayFocusTimeDate(new Date().toDateString());
+
+      // Update focus history
+      const today = new Date();
+      const newHistoryEntry = {
+        date: today.toISOString(),
+        duration: sessionMinutes,
+        taskId: currentTaskId,
+      };
+
+      const updatedHistory = [...focusHistory, newHistoryEntry];
+      setFocusHistory(updatedHistory);
+      await storage.setItem("focusHistory", JSON.stringify(updatedHistory));
 
       // Update task time if a task is selected
-      if (currentTaskId) {
+      if (currentTaskId && updateTaskTime) {
         updateTaskTime(currentTaskId, sessionMinutes);
       }
 
@@ -165,17 +228,26 @@ export const TimerProvider = ({ children }) => {
       setTimerType("pomodoro");
       setTimeRemaining(timerSettings.pomodoro * 60);
     }
-  };
+  }, [
+    timerType,
+    timerSettings,
+    completedSessions,
+    totalFocusTime,
+    todayFocusTime,
+    currentTaskId,
+    updateTaskTime,
+    focusHistory,
+  ]);
 
   // Start the timer
-  const startTimer = () => {
+  const startTimer = useCallback(() => {
     if (!isRunning) {
       setIsRunning(true);
     }
-  };
+  }, [isRunning]);
 
   // Pause the timer
-  const pauseTimer = () => {
+  const pauseTimer = useCallback(() => {
     if (isRunning) {
       setIsRunning(false);
 
@@ -198,16 +270,23 @@ export const TimerProvider = ({ children }) => {
           storage.saveTodayFocusTime(newTodayFocusTime);
 
           // Update task time if a task is selected
-          if (currentTaskId) {
+          if (currentTaskId && updateTaskTime) {
             updateTaskTime(currentTaskId, elapsedMinutes);
           }
         }
       }
     }
-  };
+  }, [
+    isRunning,
+    timerType,
+    totalFocusTime,
+    todayFocusTime,
+    currentTaskId,
+    updateTaskTime,
+  ]);
 
   // Reset the timer
-  const resetTimer = () => {
+  const resetTimer = useCallback(() => {
     setIsRunning(false);
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -216,10 +295,10 @@ export const TimerProvider = ({ children }) => {
 
     // Reset to the current timer type duration
     setTimeRemaining(timerSettings[timerType] * 60);
-  };
+  }, [timerSettings, timerType]);
 
   // Skip to the next timer
-  const skipTimer = () => {
+  const skipTimer = useCallback(() => {
     setIsRunning(false);
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -240,59 +319,88 @@ export const TimerProvider = ({ children }) => {
       setTimerType("pomodoro");
       setTimeRemaining(timerSettings.pomodoro * 60);
     }
-  };
+  }, [timerType, completedSessions, timerSettings]);
 
   // Switch timer type manually
-  const switchTimerType = (type) => {
-    if (isRunning) {
-      pauseTimer();
-    }
+  const switchTimerType = useCallback(
+    (type) => {
+      if (isRunning) {
+        pauseTimer();
+      }
 
-    setTimerType(type);
-    setTimeRemaining(timerSettings[type] * 60);
-  };
+      setTimerType(type);
+      setTimeRemaining(timerSettings[type] * 60);
+    },
+    [isRunning, pauseTimer, timerSettings]
+  );
 
   // Update timer settings
-  const updateTimerSettings = (newSettings) => {
-    setTimerSettings(newSettings);
-    storage.saveTimerSettings(newSettings);
+  const updateTimerSettings = useCallback(
+    (newSettings) => {
+      setTimerSettings(newSettings);
+      storage.saveTimerSettings(newSettings);
 
-    // Update current timer if not running
-    if (!isRunning) {
-      setTimeRemaining(newSettings[timerType] * 60);
-    }
-  };
+      // Update current timer if not running
+      if (!isRunning) {
+        setTimeRemaining(newSettings[timerType] * 60);
+      }
+    },
+    [isRunning, timerType]
+  );
 
   // Set the current task for the timer
-  const setCurrentTask = (taskId) => {
+  const setCurrentTask = useCallback((taskId) => {
     setCurrentTaskId(taskId);
-  };
+  }, []);
 
   // Format time for display (mm:ss)
-  const formatTime = (seconds) => {
+  const formatTime = useCallback((seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, "0")}:${secs
       .toString()
       .padStart(2, "0")}`;
-  };
+  }, []);
 
   // Get focus time statistics
-  const getFocusStats = () => {
+  const getFocusStats = useCallback(() => {
     return {
       totalTime: totalFocusTime,
       todayTime: todayFocusTime,
       completedSessions,
       averagePerDay: calculateAverageFocusTimePerDay(),
     };
-  };
+  }, [totalFocusTime, todayFocusTime, completedSessions]);
 
   // Calculate average focus time per day (over the last 7 days)
-  const calculateAverageFocusTimePerDay = () => {
-    // For a proper implementation, we would need to store daily focus times
-    // This is a simplified version based on today's focus time
-    return todayFocusTime;
-  };
+  const calculateAverageFocusTimePerDay = useCallback(() => {
+    if (focusHistory.length === 0) return 0;
+
+    const today = new Date();
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(today.getDate() - 7);
+
+    // Filter sessions from last 7 days
+    const recentSessions = focusHistory.filter((session) => {
+      const sessionDate = new Date(session.date);
+      return sessionDate >= sevenDaysAgo && sessionDate <= today;
+    });
+
+    if (recentSessions.length === 0) return todayFocusTime;
+
+    // Calculate total minutes
+    const totalMinutes = recentSessions.reduce(
+      (sum, session) => sum + (session.duration || 0),
+      0
+    );
+
+    // Find unique days
+    const uniqueDays = new Set(
+      recentSessions.map((session) => new Date(session.date).toDateString())
+    );
+
+    return Math.round(totalMinutes / Math.max(uniqueDays.size, 1));
+  }, [focusHistory, todayFocusTime]);
 
   const value = {
     isRunning,
@@ -301,6 +409,7 @@ export const TimerProvider = ({ children }) => {
     timerSettings,
     completedSessions,
     currentTaskId,
+    focusHistory,
     formatTime,
     startTimer,
     pauseTimer,

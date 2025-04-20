@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,37 +6,113 @@ import {
   TouchableOpacity,
   Animated,
   Dimensions,
+  Vibration,
+  AppState,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Audio } from "expo-av";
 import { useTimerContext } from "../context/TimerContext";
 import { useTaskContext } from "../context/TaskContext";
-import * as Notifications from "../utils/notifications";
 import Colors from "@/constants/color";
 
 const { width } = Dimensions.get("window");
 const circleSize = width * 0.7;
 
 const FocusTimer = () => {
+  // Access timer context with safe fallbacks
+  const timerContext = useTimerContext() || {};
   const {
-    isRunning,
-    timerType,
-    timeRemaining,
-    timerSettings,
-    formatTime,
-    startTimer,
-    pauseTimer,
-    resetTimer,
-    skipTimer,
-    switchTimerType,
-    currentTaskId,
-  } = useTimerContext();
+    isRunning = false,
+    timerType = "pomodoro",
+    timeRemaining = 1500, // 25 minutes default
+    timerSettings = { pomodoro: 25, shortBreak: 5, longBreak: 15 },
+    formatTime = (seconds) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, "0")}:${secs
+        .toString()
+        .padStart(2, "0")}`;
+    },
+    startTimer = () => {},
+    pauseTimer = () => {},
+    resetTimer = () => {},
+    skipTimer = () => {},
+    switchTimerType = () => {},
+    currentTaskId = null,
+  } = timerContext;
 
-  const { tasks } = useTaskContext();
+  // Access task context with safe fallbacks
+  const taskContext = useTaskContext() || {};
+  const { tasks = [] } = taskContext;
 
   const [progressAnimation] = useState(new Animated.Value(1));
+  const [sound, setSound] = useState();
+  const appState = useRef(AppState.currentState);
 
   // Get current task if one is selected
   const currentTask = tasks.find((task) => task.id === currentTaskId);
+
+  // Load and prepare sounds
+  useEffect(() => {
+    const loadSounds = async () => {
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          require("../assets/notification.mp3")
+        );
+        setSound(sound);
+      } catch (error) {
+        console.warn("Could not load sound", error);
+      }
+    };
+
+    loadSounds();
+
+    // Cleanup sound on unmount
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
+  }, []);
+
+  // Play completed sound
+  const playCompletionSound = useCallback(async () => {
+    try {
+      if (sound) {
+        await sound.setPositionAsync(0); // Reset to beginning
+        await sound.playAsync();
+
+        // Also vibrate the device
+        Vibration.vibrate(500);
+      }
+    } catch (error) {
+      console.warn("Could not play sound", error);
+    }
+  }, [sound]);
+
+  // Handle app coming from background
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState) => {
+      if (appState.current === "background" && nextAppState === "active") {
+        // App has come to the foreground
+        if (isRunning) {
+          // We need to synchronize our timer
+          pauseTimer();
+          startTimer();
+        }
+      }
+      appState.current = nextAppState;
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [isRunning, pauseTimer, startTimer]);
 
   // Get timer color based on type
   const getTimerColor = () => {
@@ -69,7 +145,7 @@ const FocusTimer = () => {
   // Animate progress circle
   useEffect(() => {
     // Calculate progress percentage
-    const totalSeconds = timerSettings[timerType] * 60;
+    const totalSeconds = (timerSettings[timerType] || 25) * 60;
     const progress = timeRemaining / totalSeconds;
 
     // Animate to current progress
@@ -79,11 +155,11 @@ const FocusTimer = () => {
       useNativeDriver: false,
     }).start();
 
-    // Notify when timer completes
+    // Play sound when timer completes
     if (timeRemaining === 0 && !isRunning) {
-      Notifications.showTimerCompletedNotification(timerType);
+      playCompletionSound();
     }
-  }, [timeRemaining, timerType, isRunning]);
+  }, [timeRemaining, timerType, isRunning, timerSettings, playCompletionSound]);
 
   // Handle play/pause button
   const handlePlayPause = () => {

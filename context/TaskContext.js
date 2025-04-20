@@ -1,4 +1,10 @@
-import React, { createContext, useState, useEffect, useContext } from "react";
+import React, {
+  createContext,
+  useState,
+  useEffect,
+  useContext,
+  useCallback,
+} from "react";
 import { Alert } from "react-native";
 import * as storage from "../utils/storage";
 
@@ -45,59 +51,57 @@ export const TaskProvider = ({ children }) => {
   useEffect(() => {
     if (!loading) {
       storage.saveTasks(tasks);
+      // Move the streak update logic here to avoid circular dependencies
+      updateStreakCount();
     }
-  }, [tasks, loading]);
+  }, [tasks, loading]); // removed streakCount from dependencies
 
-  // Check and update streak
-  useEffect(() => {
-    const updateStreak = async () => {
-      if (loading) return;
+  // Check and update streak - moved to a separate function
+  const updateStreakCount = useCallback(() => {
+    if (loading) return;
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-      const completedTodayTasks = tasks.filter(
-        (task) =>
-          task.completed &&
-          new Date(task.completedAt).setHours(0, 0, 0, 0) === today.getTime()
-      );
+    const completedTodayTasks = tasks.filter(
+      (task) =>
+        task.completed &&
+        new Date(task.completedAt).setHours(0, 0, 0, 0) === today.getTime()
+    );
 
-      // If completed tasks today
-      if (completedTodayTasks.length > 0) {
-        if (!lastCompletedDate) {
-          // First time completing tasks
+    // If completed tasks today
+    if (completedTodayTasks.length > 0) {
+      if (!lastCompletedDate) {
+        // First time completing tasks
+        setStreakCount(1);
+        setLastCompletedDate(today);
+        storage.saveStreak({ count: 1 });
+        storage.saveLastCompletedDate(today.toISOString());
+      } else {
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+
+        const lastDate = new Date(lastCompletedDate);
+        lastDate.setHours(0, 0, 0, 0);
+
+        if (lastDate.getTime() === yesterday.getTime()) {
+          // Consecutive day
+          const newStreakCount = streakCount + 1;
+          setStreakCount(newStreakCount);
+          setLastCompletedDate(today);
+          storage.saveStreak({ count: newStreakCount });
+          storage.saveLastCompletedDate(today.toISOString());
+        } else if (lastDate.getTime() < yesterday.getTime()) {
+          // Broke the streak
           setStreakCount(1);
           setLastCompletedDate(today);
           storage.saveStreak({ count: 1 });
           storage.saveLastCompletedDate(today.toISOString());
-        } else {
-          const yesterday = new Date(today);
-          yesterday.setDate(yesterday.getDate() - 1);
-          yesterday.setHours(0, 0, 0, 0);
-
-          const lastDate = new Date(lastCompletedDate);
-          lastDate.setHours(0, 0, 0, 0);
-
-          if (lastDate.getTime() === yesterday.getTime()) {
-            // Consecutive day
-            const newStreakCount = streakCount + 1;
-            setStreakCount(newStreakCount);
-            setLastCompletedDate(today);
-            storage.saveStreak({ count: newStreakCount });
-            storage.saveLastCompletedDate(today.toISOString());
-          } else if (lastDate.getTime() < yesterday.getTime()) {
-            // Broke the streak
-            setStreakCount(1);
-            setLastCompletedDate(today);
-            storage.saveStreak({ count: 1 });
-            storage.saveLastCompletedDate(today.toISOString());
-          }
-          // If lastDate is today, we don't need to update anything
         }
+        // If lastDate is today, we don't need to update anything
       }
-    };
-
-    updateStreak();
+    }
   }, [tasks, loading, lastCompletedDate, streakCount]);
 
   // Add a new task
@@ -132,66 +136,42 @@ export const TaskProvider = ({ children }) => {
 
   // Mark a task as complete
   const completeTask = (taskId) => {
-    setTasks((prevTasks) =>
-      prevTasks.map((task) => {
+    setTasks((prevTasks) => {
+      const newTasks = prevTasks.map((task) => {
         if (task.id === taskId) {
           const completedTask = {
             ...task,
             completed: true,
             completedAt: new Date().toISOString(),
           };
-
-          // If task is recurring, create the next instance
-          if (task.isRecurring) {
-            const nextDueDate = getNextRecurringDate(
-              task.dueDate,
-              task.recurringType
-            );
-
-            if (nextDueDate) {
-              const newRecurringTask = {
-                ...task,
-                id: Date.now().toString(),
-                completed: false,
-                completedAt: null,
-                dueDate: nextDueDate.toISOString(),
-                createdAt: new Date().toISOString(),
-                timeSpent: 0,
-              };
-
-              // Add the new recurring task in the same operation
-              return completedTask;
-            }
-          }
-
           return completedTask;
         }
         return task;
-      })
-    );
+      });
 
-    // For recurring tasks, add the next instance
-    const task = tasks.find((t) => t.id === taskId);
-    if (task && task.isRecurring) {
-      const nextDueDate = getNextRecurringDate(
-        task.dueDate,
-        task.recurringType
-      );
+      // For recurring tasks, add the next instance separately
+      const task = prevTasks.find((t) => t.id === taskId);
+      if (task && task.isRecurring) {
+        const nextDueDate = getNextRecurringDate(
+          task.dueDate,
+          task.recurringType
+        );
 
-      if (nextDueDate) {
-        const newRecurringTask = {
-          ...task,
-          id: (Date.now() + 1).toString(), // Ensure unique ID
-          completed: false,
-          completedAt: null,
-          dueDate: nextDueDate.toISOString(),
-          createdAt: new Date().toISOString(),
-          timeSpent: 0,
-        };
-
-        setTasks((prevTasks) => [...prevTasks, newRecurringTask]);
+        if (nextDueDate) {
+          const newRecurringTask = {
+            ...task,
+            id: (Date.now() + 1).toString(), // Ensure unique ID
+            completed: false,
+            completedAt: null,
+            dueDate: nextDueDate.toISOString(),
+            createdAt: new Date().toISOString(),
+            timeSpent: 0,
+          };
+          return [...newTasks, newRecurringTask];
+        }
       }
-    }
+      return newTasks;
+    });
   };
 
   // Helper function to calculate next date for recurring tasks
@@ -234,8 +214,8 @@ export const TaskProvider = ({ children }) => {
     );
   };
 
-  // Get tasks due today
-  const getTasksDueToday = () => {
+  // Get tasks due today - memoized to avoid recalculation on every render
+  const getTasksDueToday = useCallback(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -247,10 +227,10 @@ export const TaskProvider = ({ children }) => {
 
       return dueDate.getTime() === today.getTime();
     });
-  };
+  }, [tasks]);
 
-  // Get overdue tasks
-  const getOverdueTasks = () => {
+  // Get overdue tasks - memoized
+  const getOverdueTasks = useCallback(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -262,34 +242,53 @@ export const TaskProvider = ({ children }) => {
 
       return dueDate.getTime() < today.getTime();
     });
-  };
+  }, [tasks]);
 
-  // Get tasks by priority
-  const getTasksByPriority = (priority) => {
-    return tasks.filter(
-      (task) => !task.completed && task.priority === priority
-    );
-  };
+  // Get tasks by priority - memoized
+  const getTasksByPriority = useCallback(
+    (priority) => {
+      return tasks.filter(
+        (task) => !task.completed && task.priority === priority
+      );
+    },
+    [tasks]
+  );
 
-  // Calculate completion rate for a given time period
-  const getCompletionRate = (days = 7) => {
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
+  // Calculate completion rate for a given time period - memoized
+  const getCompletionRate = useCallback(
+    (days = 7) => {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
 
-    const tasksInPeriod = tasks.filter((task) => {
-      const createdAt = new Date(task.createdAt);
-      return createdAt >= startDate && createdAt <= endDate;
+      const tasksInPeriod = tasks.filter((task) => {
+        const createdAt = new Date(task.createdAt);
+        return createdAt >= startDate && createdAt <= endDate;
+      });
+
+      if (tasksInPeriod.length === 0) return 0;
+
+      const completedTasks = tasksInPeriod.filter((task) => task.completed);
+      return (completedTasks.length / tasksInPeriod.length) * 100;
+    },
+    [tasks]
+  );
+
+  // Get tasks completed today - new helper function
+  const getTasksCompletedToday = useCallback(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return tasks.filter((task) => {
+      if (!task.completed || !task.completedAt) return false;
+      const completedDate = new Date(task.completedAt);
+      completedDate.setHours(0, 0, 0, 0);
+      return completedDate.getTime() === today.getTime();
     });
+  }, [tasks]);
 
-    if (tasksInPeriod.length === 0) return 0;
-
-    const completedTasks = tasksInPeriod.filter((task) => task.completed);
-    return (completedTasks.length / tasksInPeriod.length) * 100;
-  };
-
-  // Get the reality check status
-  const getRealityCheck = () => {
+  // Get the reality check status - memoized
+  const getRealityCheck = useCallback(() => {
     const overdueTasks = getOverdueTasks();
     const todayTasks = getTasksDueToday();
     const pendingHighPriorityTasks = getTasksByPriority("high");
@@ -312,7 +311,7 @@ export const TaskProvider = ({ children }) => {
     }
 
     return { message, severity };
-  };
+  }, [getOverdueTasks, getTasksDueToday, getTasksByPriority]);
 
   const value = {
     tasks,
@@ -328,6 +327,7 @@ export const TaskProvider = ({ children }) => {
     getTasksByPriority,
     getCompletionRate,
     getRealityCheck,
+    getTasksCompletedToday,
   };
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>;
